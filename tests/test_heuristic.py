@@ -295,3 +295,51 @@ def test_preflop_open_and_fold_behaviour():
     f = compute_features(obs, 0, np.random.default_rng(0))
     assert f.pre < 0.2
     assert heuristic_action(obs, f, HeuristicParams(), np.random.default_rng(0)) == A.FOLD
+
+
+def test_range_equity_is_a_monotone_probability():
+    from bot.features import range_equity
+    for street in (1, 2, 3):
+        for t in (0.0, 0.3, 0.55, 0.7, 0.9):
+            vals = [range_equity(street, e, 0, t) for e in np.linspace(0.02, 0.98, 25)]
+            assert all(0.0 < v < 1.0 for v in vals)
+            assert all(b > a for a, b in zip(vals, vals[1:]))       # better hand, more equity
+        for e in (0.3, 0.6, 0.9):
+            vals = [range_equity(street, e, 0, t) for t in np.linspace(0.0, 0.9, 19)]
+            assert all(b <= a + 0.03 for a, b in zip(vals, vals[1:]))   # stronger range, less
+            assert vals[-1] < vals[0] - 0.2
+        assert range_equity(street, 0.6, 0, 0.0) == pytest.approx(0.6, abs=0.03)  # t=0: random
+        assert range_equity(street, 0.8, 1, 0.6) >= range_equity(street, 0.8, 0, 0.6)
+        assert range_equity(street, 0.8, 4, 0.6) <= range_equity(street, 0.8, 0, 0.6)
+
+
+def _river_spots(want, n, seed="riv"):
+    """Up to n engine river spots where the hero (seat 0, BB, out of position) has checked
+    and faces a pot-size bet, filtered by want(features at 256 rollouts)."""
+    out = []
+    for d in range(400):
+        g = _drive(make_deal(seed, d), 1, [A.CHECK_CALL] * 7 + [A.RAISE_POT])
+        obs = g.observation(0)
+        f = compute_features(obs, 256, np.random.default_rng(d))
+        if want(f):
+            out.append((obs, f))
+            if len(out) == n:
+                break
+    return out
+
+
+def test_folds_medium_river_hands_to_a_pot_bet():
+    """Equity 0.55-0.65 vs a random hand wins ~10% against a pot-betting range: fold.
+    (The brief's linear formula, eq - 0.06 > 1/3 + 0.02, would call every one of them.)"""
+    spots = _river_spots(lambda f: 0.55 <= f.eq <= 0.65 and not f.nut & 1, 15)
+    assert len(spots) == 15
+    for obs, f in spots:
+        assert obs.to_call > 0 and f.pot_odds == pytest.approx(1 / 3)
+        assert heuristic_action(obs, f, HeuristicParams(), np.random.default_rng(0)) == A.FOLD
+
+
+def test_calls_or_raises_strong_river_hands_facing_a_pot_bet():
+    spots = _river_spots(lambda f: f.eq >= 0.93, 10)
+    assert len(spots) == 10
+    for obs, f in spots:
+        assert heuristic_action(obs, f, HeuristicParams(), np.random.default_rng(0)) != A.FOLD

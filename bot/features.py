@@ -13,6 +13,7 @@ Module state is read-only; everything per-half lives with the caller.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -21,6 +22,50 @@ from bot import equity, preflop
 from game import Action, Observation, Street
 
 _RAISES = (Action.RAISE_HALF, Action.RAISE_POT)
+
+# Range model: P(we win at showdown | our equity vs random `eq`, our nut bits, and an
+# opponent whose own equity vs random is >= t). Logistic per street on a grid of t:
+#   logit P = a + b * logit(eq) + c * [nuts now] + d * [flush possible, not the nuts]
+# Fitted offline (python -m train.fit_range_model --spots 100000, seed 20261107) on
+# 100,000 random spots per street, both equities from 128 rollouts.
+# Rows are t = 0.0, 0.1, ..., 0.9; t is interpolated linearly.
+_RANGE_COEF = (
+    # FLOP
+    ((-0.01, 0.90, 0.22, 0.05), (-0.02, 0.90, 0.21, 0.05), (-0.04, 0.91, 0.21, 0.03),
+     (-0.13, 0.90, 0.19, -0.17), (-0.36, 0.89, 0.12, -0.84), (-0.73, 0.91, 0.20, -1.22),
+     (-1.15, 0.94, 0.42, -1.16), (-1.59, 0.97, 0.61, -1.24), (-2.05, 0.94, 0.80, -1.12),
+     (-2.87, 0.92, 0.61, -0.91)),
+    # TURN
+    ((-0.01, 0.94, 0.21, -0.03), (-0.02, 0.94, 0.21, -0.04), (-0.10, 0.95, 0.19, -0.19),
+     (-0.30, 0.98, 0.19, -0.52), (-0.67, 1.03, 0.25, -0.83), (-1.12, 1.09, 0.41, -0.89),
+     (-1.58, 1.12, 0.67, -0.96), (-1.97, 1.07, 1.03, -1.14), (-2.41, 0.95, 1.45, -1.11),
+     (-3.04, 0.83, 1.66, -1.30)),
+    # RIVER
+    ((0.01, 0.98, 0.61, 0.04), (-0.39, 1.20, -0.13, 0.04), (-0.82, 1.38, -0.62, 0.03),
+     (-1.32, 1.54, -0.93, 0.04), (-1.82, 1.66, -1.12, -0.05), (-2.58, 1.80, -1.25, -0.02),
+     (-3.35, 1.93, -1.20, -0.07), (-4.68, 2.15, -1.21, -0.07), (-5.84, 2.27, -0.81, -0.21),
+     (-7.07, 2.07, 0.45, -0.35)),
+)
+
+
+def range_equity(street: int, eq: float, nut: int, t: float) -> float:
+    """Equity vs an opponent range {equity vs random >= t} (postflop streets 1..3).
+
+    t is clipped to [0, 0.9]; eq to [0.005, 0.995] before the logit.
+    """
+    rows = _RANGE_COEF[int(street) - 1]
+    k = min(max(t, 0.0), 0.9) * 10.0
+    i = min(int(k), 8)
+    w = k - i
+    lo, hi = rows[i], rows[i + 1]
+    a, b, c, d = (lo[j] + w * (hi[j] - lo[j]) for j in range(4))
+    e = min(max(eq, 0.005), 0.995)
+    x = a + b * math.log(e / (1.0 - e))
+    if nut & 1:
+        x += max(c, 0.0)      # never below a non-nut hand of the same eq (river fit < 0: ties)
+    elif nut & 4:
+        x += d
+    return 1.0 / (1.0 + math.exp(-x))
 
 
 @dataclass(frozen=True)
