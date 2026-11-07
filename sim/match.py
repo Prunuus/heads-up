@@ -22,7 +22,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from game import (ACTION_TIMEOUT_SECONDS, ERROR_LIMIT,  # noqa: E402
-                  AgentConfig, Game, button_for_deal,
+                  TIME_BANK_SECONDS, AgentConfig, Game, button_for_deal,
                   default_action, make_deal)
 from judge_engine import (AGENT1_WIN, AGENT2_WIN, BOTH_FORFEIT, CHOP,  # noqa: E402
                           AgentStats, HalfResult, agent1_seat_for_half,
@@ -84,7 +84,9 @@ class MatchStats:
 class _Handle:
     """Mirror of judge_engine.HttpAgentHandle around an in-process bot."""
 
-    def __init__(self, factory: BotFactory, config: AgentConfig, grace_s: float) -> None:
+    def __init__(self, factory: BotFactory, config: AgentConfig, grace_s: float,
+                 action_timeout_s: float = ACTION_TIMEOUT_SECONDS) -> None:
+        self.action_timeout_s = action_timeout_s
         self.grace_s = grace_s
         self.factory = factory
         self.config = config
@@ -115,8 +117,8 @@ class _Handle:
         """Run one timed request. fn(hand_end_errors) returns the payload.
         Returns (ok, payload, raised): ok False means the reply is discarded."""
         bank_left = self._remaining_bank() + self.grace_s
-        limited_by_bank = bank_left < ACTION_TIMEOUT_SECONDS
-        timeout = max(0.001, min(ACTION_TIMEOUT_SECONDS, bank_left))
+        limited_by_bank = bank_left < self.action_timeout_s
+        timeout = max(0.001, min(self.action_timeout_s, bank_left))
         he_errors: list = []
         raised = False
         payload = None
@@ -201,12 +203,14 @@ class _Handle:
 
 
 def play_half(fa: BotFactory, fb: BotFactory, seed: Any, half: int,
-              deals: int = 1000, grace_s: float = 0.00075) -> HalfStats:
+              deals: int = 1000, grace_s: float = 0.00075,
+              time_bank_s: float = TIME_BANK_SECONDS,
+              action_timeout_s: float = ACTION_TIMEOUT_SECONDS) -> HalfStats:
     """Play one half; A is agent1 (seat 0 in half 1, seat 1 in half 2)."""
     seed = str(seed)
     a_seat = agent1_seat_for_half(half)
-    config = AgentConfig(num_hands=deals)
-    ha, hb = _Handle(fa, config, grace_s), _Handle(fb, config, grace_s)
+    config = AgentConfig(num_hands=deals, time_bank_seconds=time_bank_s)
+    ha, hb = _Handle(fa, config, grace_s, action_timeout_s), _Handle(fb, config, grace_s, action_timeout_s)
     bots = (ha, hb) if a_seat == 0 else (hb, ha)
     for b in bots:
         b.start_half()
