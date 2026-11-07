@@ -436,7 +436,12 @@ def _load(path: Path) -> BucketTables:
 
 
 def load_buckets(path: str | Path | None = None) -> BucketTables:
-    """The tables at `path`; with no path, the default file, loaded once and cached."""
+    """The tables at `path`; with no path, the default file, loaded once and cached.
+
+    Raises FileNotFoundError if the file is missing and ValueError if it is malformed.
+    Raises RuntimeError if the default file's counts differ from NUM_BUCKETS (it was
+    replaced after import), because ids would then fall outside NUM_BUCKETS.
+    """
     global _TABLES
     if path is not None:
         return _load(Path(path))

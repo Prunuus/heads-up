@@ -344,7 +344,7 @@ def _flop_runout_in_hole(a):
 
 @pytest.mark.parametrize("corrupt", [
     lambda a: a.__setitem__("format", np.int64(2)),                           # newer format
-    lambda a: a.__setitem__("flop_grid", np.array([5, 10])),                  # 50 cells, 100 buckets
+    lambda a: a["num_buckets"].__setitem__(1, 50),                            # count 50, 10 x 10 grid
     lambda a: a.__setitem__("river_edges", a["river_edges"][:-1]),            # one edge short
     lambda a: a["turn_equity_edges"].__setitem__((2, 3), 2.0),                # edges out of order
     lambda a: a.pop("preflop_edges"),                                         # missing edges
