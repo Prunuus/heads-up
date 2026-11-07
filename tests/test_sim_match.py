@@ -1,6 +1,8 @@
+import sys
+
 import pytest
 
-from game import Action
+from game import Action, AgentConfig
 from sim.match import (HalfStats, MatchStats, bot_file_factory, load_bot_file,
                        play_half, play_match)
 
@@ -63,6 +65,52 @@ def test_identical_bots_chop():
 def test_load_bot_file_fresh_globals():
     a, b = load_bot_file(CALLER), load_bot_file(CALLER)
     assert a is not b and a.__name__ != b.__name__
+
+
+# ---- every load re-imports our bot package, like a fresh process (audit I3, ruling R22)
+
+LEAKY = "tests/fixtures/leaky_bot.py"     # keeps a counter in an imported bot.* module
+
+
+def test_bot_package_state_does_not_survive_load_bot_file():
+    seen = []
+    for _ in range(2):
+        m = load_bot_file(LEAKY)
+        memory = {}
+        m.new_half(AgentConfig(), memory)
+        seen.append(memory["halves_started"])
+    assert seen == [1, 1]          # two fresh processes; a shared bot.* module gives [1, 2]
+
+
+def test_bot_package_state_does_not_cross_halves_or_bots():
+    loaded = []
+
+    def factory():
+        loaded.append(load_bot_file(LEAKY))
+        return loaded[-1]
+
+    play_match(factory, factory, seed="s1", deals=2)
+    assert len(loaded) == 4                                   # 2 halves x 2 bots
+    assert [m.halves_started() for m in loaded] == [1, 1, 1, 1]
+    assert len({id(m.shared) for m in loaded}) == 4           # each bot had its own copy
+
+
+def test_load_bot_file_leaves_the_callers_modules_alone():
+    import bot.timing
+    mine = sys.modules["bot.timing"]
+    m = load_bot_file(LEAKY)
+    assert m.shared is not mine and m.shared.TimeManager is not mine.TimeManager
+    assert sys.modules["bot.timing"] is mine      # pickling, monkeypatch, isinstance still work
+    # The loaded module, and the bot.* copies it holds, live only as long as the caller
+    # keeps the module: a long serial run must not keep one copy (and its tables) per half.
+    assert m.__name__ not in sys.modules
+
+
+def test_fresh_packages_is_a_keyword():
+    a = load_bot_file(LEAKY, fresh_packages=())
+    b = load_bot_file(LEAKY, fresh_packages=())
+    assert a.shared is b.shared                    # nothing evicted, so one shared module
+    assert load_bot_file(LEAKY).shared is not a.shared
 
 
 def test_crashing_bot_forfeits_and_loses():
