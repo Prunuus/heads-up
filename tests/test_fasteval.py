@@ -166,6 +166,12 @@ def test_zero_rows_give_an_empty_result():
     assert score5_batch(np.zeros((0, 5), dtype=np.int64)).shape == (0,)
 
 
+# A clear error names the argument at fault. numpy's own errors for these shapes
+# ("operands could not be broadcast together with shapes (3,10,1) (5,1,10)", "axis 1 is
+# out of bounds", ...) talk about internal arrays instead.
+CLEAR = "holes|boards|cards"
+
+
 @pytest.mark.parametrize("holes,boards", [
     ((3, 5), (5, 5)),       # row counts differ and neither is 1
     ((5,), (4, 5)),         # 1-D hole
@@ -176,7 +182,7 @@ def test_zero_rows_give_an_empty_result():
     ((4, 5, 1), (4, 5)),    # 3-D
 ])
 def test_omaha_batch_rejects_unsupported_shapes(holes, boards):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=CLEAR):
         omaha_batch(np.zeros(holes, dtype=np.int64), np.zeros(boards, dtype=np.int64))
 
 
@@ -184,13 +190,13 @@ def test_omaha_batch_rejects_unsupported_shapes(holes, boards):
     ((3, 5), (5, 3)), ((5,), (4, 3)), ((4, 6), (4, 4)), ((4, 5), (4, 2)), ((4, 5), (4, 6)),
 ])
 def test_made_now_batch_rejects_unsupported_shapes(holes, boards):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=CLEAR):
         made_now_batch(np.zeros(holes, dtype=np.int64), np.zeros(boards, dtype=np.int64))
 
 
 @pytest.mark.parametrize("shape", [(5,), (4, 4), (4, 6), (2, 5, 1)])
 def test_score5_batch_rejects_unsupported_shapes(shape):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=CLEAR):
         score5_batch(np.zeros(shape, dtype=np.int64))
 
 

@@ -1,3 +1,4 @@
+import importlib
 import sys
 
 import pytest
@@ -100,8 +101,7 @@ def test_bot_package_state_does_not_cross_halves_or_bots():
 
 
 def test_load_bot_file_leaves_the_callers_modules_alone():
-    import bot.timing
-    mine = sys.modules["bot.timing"]
+    mine = importlib.import_module("bot.timing")          # the caller's own copy
     m = load_bot_file(LEAKY)
     assert m.shared is not mine and m.shared.TimeManager is not mine.TimeManager
     assert sys.modules["bot.timing"] is mine      # pickling, monkeypatch, isinstance still work

@@ -81,8 +81,9 @@ def _best_of(holes: np.ndarray, boards: np.ndarray, widths: tuple) -> np.ndarray
 
     holes (Nh,5) and boards (Nb,w) with w in widths. Nh == Nb pairs row i with row i.
     A single row on either side (Nh == 1 or Nb == 1) is paired with every row of the
-    other side, so the result has max(Nh, Nb) rows. Anything else raises ValueError:
-    a wrong shape must never collapse into a single, silently wrong, score.
+    other side, so the result has the other side's row count (a single row against
+    zero rows gives zero). Anything else raises ValueError: a wrong shape must never
+    collapse into a single, silently wrong, score.
     """
     h = _prep(holes)
     b = _prep(boards)
