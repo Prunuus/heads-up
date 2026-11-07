@@ -1,0 +1,167 @@
+{
+  "fresh_states": 480,
+  "streets": {
+    "3": 160,
+    "4": 160,
+    "5": 160
+  },
+  "full_tiers": {
+    "WEAK": 219,
+    "MEDIUM": 143,
+    "STRONG": 102,
+    "NUTS": 16
+  },
+  "street_tiers": {
+    "3": {
+      "WEAK": 77,
+      "MEDIUM": 45,
+      "STRONG": 38
+    },
+    "4": {
+      "MEDIUM": 44,
+      "STRONG": 43,
+      "WEAK": 73
+    },
+    "5": {
+      "WEAK": 69,
+      "STRONG": 21,
+      "NUTS": 16,
+      "MEDIUM": 54
+    }
+  },
+  "spearman_fragment_vs_fivecard": 0.9566161004781094,
+  "reduced_tiers": {
+    "WEAK": 228,
+    "MEDIUM": 152,
+    "STRONG": 100
+  },
+  "textures": {
+    "paired": 273,
+    "trips": 120,
+    "suited": 140,
+    "ordinary": 120
+  },
+  "boundary_coverage": {
+    ".03": 60,
+    ".12": 37
+  },
+  "coverage_pass": true,
+  "reduced_coverage_pass": true,
+  "strong_severe_mislabels": {
+    "FULL_PAIR_v04": {
+      "count": 0,
+      "strong_n": 102,
+      "wilson_95": [
+        0.0,
+        0.03629574760774591
+      ]
+    },
+    "REDUCED_64_v04": {
+      "count": 0,
+      "strong_n": 100,
+      "wilson_95": [
+        0.0,
+        0.03699480747600191
+      ]
+    }
+  },
+  "full_tier_fivecard_risks": {
+    "WEAK": {
+      "n": 219,
+      "mean_stronger": 0.7664181868470136,
+      "mean_tieonly": 0.03023607966530341
+    },
+    "MEDIUM": {
+      "n": 143,
+      "mean_stronger": 0.42788395489064385,
+      "mean_tieonly": 0.0587459430876883
+    },
+    "STRONG": {
+      "n": 102,
+      "mean_stronger": 0.09809539904382189,
+      "mean_tieonly": 0.02627353938095626
+    },
+    "NUTS": {
+      "n": 16,
+      "mean_stronger": 0.0,
+      "mean_tieonly": 0.003605769230769231
+    }
+  },
+  "upward_tier": {
+    "count": 24,
+    "rate": 0.05,
+    "wilson_95": [
+      0.0338268772604763,
+      0.07331893244253394
+    ]
+  },
+  "downward_tier": {
+    "count": 67,
+    "rate": 0.13958333333333334
+  },
+  "by_stratum": {
+    "ordinary": {
+      "n": 120,
+      "upward": 9,
+      "downward": 16
+    },
+    "boundary_.03": {
+      "n": 60,
+      "upward": 6,
+      "downward": 22
+    },
+    "boundary_.12": {
+      "n": 37,
+      "upward": 7,
+      "downward": 11
+    },
+    "paired": {
+      "n": 273,
+      "upward": 11,
+      "downward": 43
+    },
+    "trips": {
+      "n": 120,
+      "upward": 8,
+      "downward": 23
+    },
+    "suited": {
+      "n": 140,
+      "upward": 5,
+      "downward": 12
+    }
+  },
+  "reachable_actions": 1004,
+  "action_disagreement": 0.043824701195219126,
+  "action_counts": {
+    "FLOP_n": 601,
+    "FLOP_disagree": 19,
+    "full_CHECK_CALL": 554,
+    "disagreement_from_CHECK_CALL": 23,
+    "salt0_disagree": 44,
+    "salt1_disagree": 46,
+    "salt2_disagree": 50,
+    "salt3_disagree": 41,
+    "full_RAISE_HALF": 150,
+    "disagreement_from_RAISE_HALF": 16,
+    "TURN_n": 283,
+    "TURN_disagree": 16,
+    "full_FOLD": 299,
+    "disagreement_from_FOLD": 4,
+    "RIVER_n": 120,
+    "RIVER_disagree": 9,
+    "full_RAISE_POT": 1,
+    "disagreement_from_RAISE_POT": 1
+  },
+  "accuracy_diagnostics": {
+    "FULL_PAIR_v04": "PASS",
+    "REDUCED_64_v04": "PASS"
+  },
+  "note": "Diagnostics only until E0 passes. T11/T12 approximation tolerances apply to REDUCED; FULL is the exact tier reference.",
+  "inputs_sha256": {
+    "design\\research\\fresh_stratified_inputs_v04.csv": "040411526e2f5c741fac689162b87c4a124240af0d695b973bf464307ee46ee9",
+    "reports\\fresh_cal31_inputs.csv": "86c09e294d370f4c5601722a8be55d56e30fde58a94a017d7b9ba44d5f4742a7",
+    "reports\\fresh_official.csv": "045d8df6996569cfae5304258f38e9ca503510fbb54f6d999db597431bcf2c27",
+    "reports\\fresh_cal31_official.csv": "91943505dda1e3812ccd7fdea958e705cc48556c9a8130c966f070e127b659c5"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "utc": "2026-11-07T20:52:06.458605+00:00",
+  "status": "FROZEN_BEFORE_HOLDOUT",
+  "mode": "FULL_PAIR_v04",
+  "sampler_salt": 0,
+  "adaptation": true,
+  "pure_bluffs": false,
+  "policy": "B",
+  "source_hashes": {
+    "agent.py": "24a247bfbe2121693fb11ecebf24e05935770bc9f1e2df3a38c9e54040ee96dc",
+    "poker_eval.py": "c9870efdff3b09dff732ca9c8db0ab5dcb1b5869c40291b3c48c1ab1968399d3",
+    "poker_memory.py": "62fcd0b9c00420350b76919c5de7c26a548f8ced65cfd2088aee4465f0653daa",
+    "poker_policy.py": "5cd84204e9997f1da039d4211092ae890c7d5342cef211df49fcc9155428a4df",
+    "game.py": "bc00e3c2d1bf64cbd36bf5553dae218767f11b20f388e5c417d989919877f2db",
+    "judge_engine.py": "fa7a7e3fb49c09588cfcf0930a8e3f6c189e419dbc54263ae7d53b953223d422",
+    "evaluator.py": "e2a151a4c41828a035030f490c91b81015d04bc209abfb860ca3d0dce649e0b4",
+    "requirements.txt": "5dcc7f7e055be6ada8bec3c31d4a507075882c31ca0f89ba89eb2596a7d41df7"
+  },
+  "selection_sha256": "9a11af044881ccf804978444669a8111e43618a336dbcee07dc5707b3e2747f4",
+  "mode_freeze_sha256": "c91be9c7fb3ba800c5f4fe36e17f83e94337a918ea89fc86e8ea8b3cbc4b6626",
+  "configuration_hash": "f0db3f33f4b3c1be219fc41c08c4ade61d98b165c9d2c75eb445d2c25fbd4367"
+}

@@ -1,0 +1,17 @@
+{
+  "full_duplicate_matches": 56,
+  "hands": 112000,
+  "candidate_errors": 0,
+  "max_charged_seconds": 2.570237,
+  "max_post_ms": 53.829152006073855,
+  "final_points": 4.0,
+  "final_verdicts": {
+    "AGENT2_WIN": 4,
+    "AGENT1_WIN": 4
+  },
+  "mode": "FULL_PAIR_v04",
+  "adaptation": true,
+  "pure_bluffs": false,
+  "engineering_qualification": "PASS",
+  "competitive_strength": "MIXED_UNDERPERFORMS_RANDOM_AND_POT"
+}

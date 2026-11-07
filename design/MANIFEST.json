@@ -1,0 +1,65 @@
+{
+  "files": {
+    "CHANGELOG.md": {
+      "bytes": 5052,
+      "sha256": "a3e86302674fd1d0a00983c701d677aaccf05362978066c4bc747bbac060fb0d"
+    },
+    "CRITERIA.md": {
+      "bytes": 20970,
+      "sha256": "cf0a46ba2d22b928885f51fc1c42d3ea3917048844365cb7100a108f4d9bbaae"
+    },
+    "DESIGN.md": {
+      "bytes": 53517,
+      "sha256": "8668cd1f4dab9473bc9bf60457a92dda47553532f58e30113a98a364710ddda2"
+    },
+    "EXPERIMENTS.md": {
+      "bytes": 17050,
+      "sha256": "73e5253fe4108c69dbc7fdd4182595fe42e36de4138aa75a0463408f2f98f350"
+    },
+    "READINESS.md": {
+      "bytes": 2847,
+      "sha256": "a138fb32da8430043aa34189ba6bbfea14ca6e04b089905bcef3a753b2eddcad"
+    },
+    "RESEARCH_README.md": {
+      "bytes": 6702,
+      "sha256": "790899de0c6f404ed8ca1f10ee2d66649d98593c8ad0360ba79460ba0208f3c1"
+    },
+    "research/calibrate_offline.py": {
+      "bytes": 13864,
+      "sha256": "c6f6d5a865b080eb8fea57ef1d325afd366a066175f6d811e42a2c067edf96ff"
+    },
+    "research/fresh_stratified_inputs_v04.csv": {
+      "bytes": 15590,
+      "sha256": "040411526e2f5c741fac689162b87c4a124240af0d695b973bf464307ee46ee9"
+    },
+    "research/legacy_independent_scorer_v03.py": {
+      "bytes": 2771,
+      "sha256": "32a74cff4dc426db7d047a1fcaacd5a17d47347fec5b62a38972afa96e66a663"
+    },
+    "research/legacy_street_calibration_samples_v03.csv": {
+      "bytes": 19907,
+      "sha256": "3b20b273b842a0608bd7ba7537fcb42ec032819f1d8a8dee63919783a52afa92"
+    },
+    "research/pilot_raw_reconstructed_v04.csv": {
+      "bytes": 38809,
+      "sha256": "e63337c2dcc88a702e96471fb288109034730898b783f16c542efbcd5da4b60f"
+    },
+    "research/sampler_fixtures_v04.json": {
+      "bytes": 5942,
+      "sha256": "0758f8571628901c2fd4e570112f38929090a2ec82cc6a1c6fd9c25d7ba07cce"
+    }
+  },
+  "no_bot_implementation": true,
+  "package": "TAMU Poker Bot Elephant v0.4 design-only",
+  "primary_spec": "DESIGN.md",
+  "source_commit": "c83ab6eeb7660a2fd1fae7df224315d41fe985a9",
+  "status": {
+    "fresh_calibration": "input_states_only",
+    "legacy_pilot_hero_scores_and_fragment_counts": "240/240 checked by legacy scorer only",
+    "match_evaluation": "not_executed",
+    "mode_selected": "no",
+    "pilot_official_evaluator_cross_validation": "not_executed",
+    "runtime_benchmark": "not_executed",
+    "sampler_fixtures": "locally_checked"
+  }
+}

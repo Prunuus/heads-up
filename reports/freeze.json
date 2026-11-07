@@ -1,0 +1,38 @@
+{
+  "utc": "2026-11-07T20:49:10.963554+00:00",
+  "status": "APPROVED",
+  "mode": "FULL_PAIR_v04",
+  "sampler_salt": 0,
+  "gates": {
+    "FULL_PAIR_v04": {
+      "runtime": "PASS",
+      "accuracy": "PASS"
+    },
+    "REDUCED_64_v04": {
+      "runtime": "PASS",
+      "accuracy": "PASS"
+    }
+  },
+  "source_hashes": {
+    "agent.py": "0cc003934d365e197afbb5cc3c865c9ced341ce880c31c31a5e7f4d67f3725db",
+    "poker_eval.py": "c9870efdff3b09dff732ca9c8db0ab5dcb1b5869c40291b3c48c1ab1968399d3",
+    "poker_memory.py": "62fcd0b9c00420350b76919c5de7c26a548f8ced65cfd2088aee4465f0653daa",
+    "poker_policy.py": "5cd84204e9997f1da039d4211092ae890c7d5342cef211df49fcc9155428a4df",
+    "game.py": "bc00e3c2d1bf64cbd36bf5553dae218767f11b20f388e5c417d989919877f2db",
+    "judge_engine.py": "fa7a7e3fb49c09588cfcf0930a8e3f6c189e419dbc54263ae7d53b953223d422",
+    "evaluator.py": "e2a151a4c41828a035030f490c91b81015d04bc209abfb860ca3d0dce649e0b4",
+    "requirements.txt": "5dcc7f7e055be6ada8bec3c31d4a507075882c31ca0f89ba89eb2596a7d41df7"
+  },
+  "identity_edit": {
+    "measured_participant": "licheng",
+    "measured_bot": "ElephantGoldfish-v04",
+    "current_agent_sha256": "636250d8327139c989a4732e2e6b860e3481b7d49bef2c31b426e6b71b606f08",
+    "note": "Only participant and bot name literals changed in shared workspace; strategy/protocol are byte-identical."
+  },
+  "evidence_sha256": {
+    "reports\\E0\\registry.json": "9aee384ac2dadec8f13ec5ba700a876be43d67edf9a379fa5bccc23082daaa8e",
+    "reports\\accuracy.json": "9173b232702d0091dda6f1cc12754fb50a849cee3bb358d5642f34f5c57611b0",
+    "reports\\correctness.xml": "463233fdfe62b362c98bedbe0f3a927b107c72b9adfd8668ac131d9f25a4753c",
+    "reports\\official_build.log": "bb77c948f9a575eb7f7f83395e1b8d523b38aa0470c0bf8a2ac050d0ef7c96b3"
+  }
+}

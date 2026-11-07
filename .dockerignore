@@ -1,0 +1,12 @@
+.git
+.venv
+.work
+__pycache__
+**/__pycache__
+.pytest_cache
+design
+reports
+tests
+research
+*.pdf
+*.zip

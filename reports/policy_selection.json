@@ -1,0 +1,216 @@
+{
+  "utc": "2026-11-07T20:51:32.843924+00:00",
+  "mode": "FULL_PAIR_v04",
+  "sampler_salt": 0,
+  "selected": "B",
+  "adaptation": true,
+  "pure_bluffs": false,
+  "B_vs_A": {
+    "promote": true,
+    "point_delta": 0.5,
+    "mean_delta_bb": 0.3494375,
+    "per_opponent_points": {
+      "baseline_random": 0.0,
+      "baseline_calling_station": 0.0,
+      "baseline_always_half": 0.5,
+      "baseline_always_pot": 0.0
+    },
+    "comparisons": [
+      {
+        "opponent": "baseline_random",
+        "seed": "dev-11",
+        "mean_delta_bb": -0.041,
+        "variance_delta": 66.51283183183183,
+        "ci_delta": [
+          -0.5464856029257067,
+          0.4644856029257067
+        ],
+        "match_point_delta": 0.0
+      },
+      {
+        "opponent": "baseline_random",
+        "seed": "dev-29",
+        "mean_delta_bb": 0.2275,
+        "variance_delta": 74.78928303303303,
+        "ci_delta": [
+          -0.3085135349967384,
+          0.7635135349967385
+        ],
+        "match_point_delta": 0.0
+      },
+      {
+        "opponent": "baseline_calling_station",
+        "seed": "dev-11",
+        "mean_delta_bb": 0.66,
+        "variance_delta": 12.925325325325325,
+        "ci_delta": [
+          0.43716838247284173,
+          0.8828316175271583
+        ],
+        "match_point_delta": 0.0
+      },
+      {
+        "opponent": "baseline_calling_station",
+        "seed": "dev-29",
+        "mean_delta_bb": 0.788,
+        "variance_delta": 12.241297297297297,
+        "ci_delta": [
+          0.5711448232176661,
+          1.004855176782334
+        ],
+        "match_point_delta": 0.0
+      },
+      {
+        "opponent": "baseline_always_half",
+        "seed": "dev-11",
+        "mean_delta_bb": 0.452,
+        "variance_delta": 69.04073673673673,
+        "ci_delta": [
+          -0.06300183907229667,
+          0.9670018390722968
+        ],
+        "match_point_delta": 0.0
+      },
+      {
+        "opponent": "baseline_always_half",
+        "seed": "dev-29",
+        "mean_delta_bb": 0.5,
+        "variance_delta": 117.67567567567568,
+        "ci_delta": [
+          -0.17235621189639916,
+          1.1723562118963993
+        ],
+        "match_point_delta": 0.5
+      },
+      {
+        "opponent": "baseline_always_pot",
+        "seed": "dev-11",
+        "mean_delta_bb": 0.129,
+        "variance_delta": 0.16652552552552552,
+        "ci_delta": [
+          0.10370722516490413,
+          0.15429277483509587
+        ],
+        "match_point_delta": 0.0
+      },
+      {
+        "opponent": "baseline_always_pot",
+        "seed": "dev-29",
+        "mean_delta_bb": 0.08,
+        "variance_delta": 0.09769769769769769,
+        "ci_delta": [
+          0.060626939439637435,
+          0.09937306056036257
+        ],
+        "match_point_delta": 0.0
+      }
+    ]
+  },
+  "C_vs_B": {
+    "promote": false,
+    "point_delta": 0.0,
+    "mean_delta_bb": 0.0,
+    "per_opponent_points": {
+      "baseline_random": 0.0,
+      "baseline_calling_station": 0.0,
+      "baseline_always_half": 0.0,
+      "baseline_always_pot": 0.0
+    },
+    "comparisons": [
+      {
+        "opponent": "baseline_random",
+        "seed": "dev-11",
+        "mean_delta_bb": 0.0,
+        "variance_delta": 0.0,
+        "ci_delta": [
+          0.0,
+          0.0
+        ],
+        "match_point_delta": 0.0
+      },
+      {
+        "opponent": "baseline_random",
+        "seed": "dev-29",
+        "mean_delta_bb": 0.0,
+        "variance_delta": 0.0,
+        "ci_delta": [
+          0.0,
+          0.0
+        ],
+        "match_point_delta": 0.0
+      },
+      {
+        "opponent": "baseline_calling_station",
+        "seed": "dev-11",
+        "mean_delta_bb": 0.0,
+        "variance_delta": 0.0,
+        "ci_delta": [
+          0.0,
+          0.0
+        ],
+        "match_point_delta": 0.0
+      },
+      {
+        "opponent": "baseline_calling_station",
+        "seed": "dev-29",
+        "mean_delta_bb": 0.0,
+        "variance_delta": 0.0,
+        "ci_delta": [
+          0.0,
+          0.0
+        ],
+        "match_point_delta": 0.0
+      },
+      {
+        "opponent": "baseline_always_half",
+        "seed": "dev-11",
+        "mean_delta_bb": 0.0,
+        "variance_delta": 0.0,
+        "ci_delta": [
+          0.0,
+          0.0
+        ],
+        "match_point_delta": 0.0
+      },
+      {
+        "opponent": "baseline_always_half",
+        "seed": "dev-29",
+        "mean_delta_bb": 0.0,
+        "variance_delta": 0.0,
+        "ci_delta": [
+          0.0,
+          0.0
+        ],
+        "match_point_delta": 0.0
+      },
+      {
+        "opponent": "baseline_always_pot",
+        "seed": "dev-11",
+        "mean_delta_bb": 0.0,
+        "variance_delta": 0.0,
+        "ci_delta": [
+          0.0,
+          0.0
+        ],
+        "match_point_delta": 0.0
+      },
+      {
+        "opponent": "baseline_always_pot",
+        "seed": "dev-29",
+        "mean_delta_bb": 0.0,
+        "variance_delta": 0.0,
+        "ci_delta": [
+          0.0,
+          0.0
+        ],
+        "match_point_delta": 0.0
+      }
+    ]
+  },
+  "rationale": "Promote only with >=0.5 points, >=0.02 bb/deal, and no opponent regression >=1 point. Ties retain the simpler policy.",
+  "registry_sha256": {
+    "dev_A": "9ab97b0a0a5584c91a7984675514ef4cbc709bf27ff606161ef0f89cbfbe4d66",
+    "dev_B": "2c0114cb4f03eb99c2f539a645731cad035d56e251e389387c281f0ecbd8f23b",
+    "dev_C": "f114730fc0a0c5dd0293633d8d0845157a495fdc33ffeb3fabdacd3b8c8d0c8d"
+  }
+}
