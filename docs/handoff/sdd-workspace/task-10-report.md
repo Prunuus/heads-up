@@ -1,6 +1,12 @@
 # Task 10 report: Features and heuristic policy
 
-**Status: DONE.** All three acceptance targets (a), (b), (c) are met by the committed version (v1, `08e541f`); see the final tables below. I wrapped up early at the controller's request. The "next ideas" section lists what I would try next, for Task 12/13/14 to pick up.
+**Status: DONE_WITH_CONCERNS.** All three acceptance targets (a), (b), (c) are met by the committed version (v1, `08e541f`); see the final tables below. The concerns are listed at the end: measurements ran on a loaded machine, there is a first-decision cache spike for Task 11, and margins are thin against ml_minded and gto_inspired.
+
+I stopped at the controller's request, before the user went offline:
+- A last experiment (`probe_shift`, idea (a) below) was started and then aborted before it produced results. Its code was reverted, never committed or adopted.
+- The working tree is clean and equals `08e541f`. Default suite at that state: **207 passed, 8 deselected**.
+
+The "next ideas" section lists what I would try next, for Task 12/13/14 to pick up.
 
 Commits on `kevin` (base `66a3d73`):
 - `0269604` feat(bot): features and parameterized heuristic policy (v0: the brief's rules, literally)
