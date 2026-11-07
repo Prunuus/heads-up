@@ -1,0 +1,55 @@
+{
+  "utc": "2026-11-07T21:06:37.302433+00:00",
+  "control_commit": "ce24fa493b02145eca849d8a2d0425d0e881e7a8",
+  "mode": "FULL_PAIR_v04",
+  "salt": 0,
+  "development_seeds": [
+    "dev-v05-101",
+    "dev-v05-131"
+  ],
+  "confirmation_seeds": [
+    "dev-v05-151",
+    "dev-v05-181"
+  ],
+  "final_seeds": [
+    "final-v05-211",
+    "final-v05-223",
+    "final-v05-239",
+    "final-v05-251",
+    "final-v05-263"
+  ],
+  "stress_seeds": [
+    "stress-v05-311",
+    "stress-v05-337"
+  ],
+  "variants": [
+    "v04",
+    "v05_price",
+    "v05_medium",
+    "v05_defend35",
+    "v05_defend30",
+    "v05_trap",
+    "v05_limp"
+  ],
+  "promotion": ">=0.5 additional points, >=0.02 mean paired bb/deal, no opponent loss >=1 point on matched development set; final goal all audited matches win",
+  "scope": "User authorized strategy revision to address all four baselines. No future-win guarantee; final seeds are sealed until a candidate is frozen. Initial direct-call screens do not qualify HTTP timing.",
+  "extensions": [
+    {
+      "utc": "2026-11-07T21:09:34.156006+00:00",
+      "variants": [
+        "v05_profile",
+        "v05_aggressive30",
+        "v05_aggressive_limp"
+      ],
+      "reason": "Development screen exposed STATION taking precedence over demonstrated aggressive raising; isolate profile priority and combine with previously screened price/defense changes. No final seeds accessed."
+    }
+  ],
+  "confirmation_rule": {
+    "utc": "2026-11-07T21:11:14.040363+00:00",
+    "candidates": [
+      "v05_aggressive30",
+      "v05_aggressive_limp"
+    ],
+    "selection": "After full HTTP train/confirmation runs, require promotion versus frozen v04 control on train seeds. Among eligible candidates choose highest minimum per-match paired 95% CI lower bound across train+confirmation. Tie: highest mean BB, then simpler configuration. Both candidates already won all eight initial development screens; no final seeds have been accessed."
+  }
+}

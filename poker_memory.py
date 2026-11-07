@@ -169,7 +169,7 @@ def finish(result, memory):
         diagnostic(memory, f"on_hand_end: {exc}")
 
 
-def profile(memory):
+def profile(memory, aggression_first=False):
     n = memory["first_observed"]
     vpip = (memory["vpip"] + 6.6) / (n + 12)
     pr = (memory["pre_raise_hands"] + 3.6) / (n + 12)
@@ -177,12 +177,15 @@ def profile(memory):
     fp = (memory["pre_folds"] + 3.84) / (memory["resolved_pre"] + 12)
     fq = (memory["post_folds"] + 3.84) / (memory["resolved_post"] + 12)
     label = "UNKNOWN"
+    aggressive = ((memory["post_nonfold"] >= 16 and pa >= .42) or (n >= 20 and pr >= .50))
     if memory["adaptation"]:
         if memory["resolved_post"] >= 12 and fq >= .50:
             label = "OVERFOLDER"
+        elif aggression_first and aggressive:
+            label = "AGGRESSIVE"
         elif n >= 20 and vpip >= .55 and memory["resolved_post"] >= 10 and fq <= .25:
             label = "STATION"
-        elif (memory["post_nonfold"] >= 16 and pa >= .42) or (n >= 20 and pr >= .50):
+        elif aggressive:
             label = "AGGRESSIVE"
         elif n >= 30 and vpip <= .27 and pr <= .30:
             label = "TIGHT"

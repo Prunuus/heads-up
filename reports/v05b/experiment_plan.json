@@ -1,0 +1,42 @@
+{
+  "utc": "2026-11-07T21:26:24.834062+00:00",
+  "control_strategy": "v05_aggressive_limp",
+  "control_phase_a_audit": "19 wins, 1 chop, 0 losses; retained unchanged at reports/v05/final",
+  "mode": "FULL_PAIR_v04",
+  "salt": 0,
+  "development_seeds": [
+    "dev-v05b-401",
+    "dev-v05b-409"
+  ],
+  "confirmation_seeds": [
+    "dev-v05b-419",
+    "dev-v05b-431"
+  ],
+  "stress_seeds": [
+    "stress-v05b-443",
+    "stress-v05b-449"
+  ],
+  "final_seeds": [
+    "final-v05b-503",
+    "final-v05b-509",
+    "final-v05b-521",
+    "final-v05b-541",
+    "final-v05b-547"
+  ],
+  "variants": [
+    "v05_aggressive_limp",
+    "v05_limp20",
+    "v05_limp25",
+    "v05_limp35",
+    "v05_limp40",
+    "v05_limp45"
+  ],
+  "axis": "Only preflop facing-raise minimum feature score against confirmed aggression; all profile, postflop, trap and opening rules held fixed. No changes from final card outcomes.",
+  "selection": "Screen on new development seeds. Rank by minimum per-match CI lower bound; ties by mean paired BB. Confirm best candidate via full HTTP against control on train and confirmation seeds. Promote only if all 16 candidate HTTP matches win, candidate gains >=0.25 mean paired BB/deal overall, improves AlwaysPot mean by >=0.5 BB/deal, no opponent loses >=1 match point or >=0.5 mean BB/deal. If none qualify retain phase A. Both candidates already at match-point ceiling can improve confidence/BB instead of impossible +0.5 points.",
+  "final_policy": "Never reuse phase A final seeds. New five final labels are sealed until a new source/config freeze.",
+  "screen_selection": {
+    "utc": "2026-11-07T21:28:40.752378+00:00",
+    "candidate": "v05_limp20",
+    "rule": "Highest minimum per-match CI lower bound on new development screen, as preregistered. Confirm this one candidate against fixed score-30 control through full HTTP train and confirmation sets. No new final seeds accessed."
+  }
+}

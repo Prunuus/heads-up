@@ -1,12 +1,14 @@
-# ElephantGoldfish v0.4
+# 3XKO poker bot v0.5
 
 Deterministic heads-up short-deck PLO5 bot for the TAMU Datathon challenge.
 Repository work is on **`licheng`**. Participant: `3XKO`; bot: `3XKO`.
 Use your registered team name when submitting.
 
-This implements the supplied [v0.4 design](design/DESIGN.md). Read
-[the release report](reports/RELEASE.md) for gate status, evaluator configuration,
-runtime measurements, competitive results, and limitations. Passing unit tests
+This builds on the supplied [v0.4 design](design/DESIGN.md). The user-authorized
+v0.5 revision corrects aggression classification and overfolding, with controlled
+development comparisons and a new sealed audit. Read
+[the current release report](reports/v05/RELEASE.md) for results and limitations.
+The [v0.4 report](reports/RELEASE.md) is historical. Passing unit tests
 alone does not establish tournament readiness.
 
 Install with Python 3.12 (the official container runtime) or Python 3.13:
@@ -46,7 +48,16 @@ The implementation has four small modules:
 - `poker_memory.py`: observed-opportunity counters, smoothed labels, history
   deduplication, pending responses, transactional terminal-result deduplication.
 
-Both evaluator modes are independently testable. There is no dynamic switching.
+The deployed strategy is `v05_limp20`: after sufficient observed evidence,
+frequent raisers take priority over the calling-station label; MEDIUM/STRONG hands
+can defend ordinary pot prices; preflop hands scoring at least 20 defend against
+confirmed aggression; calls and button limps avoid unnecessary reraises. UNKNOWN,
+TIGHT, STATION and OVERFOLDER pricing remains unchanged. Pure bluffs stay disabled.
+These are conditional heuristics, not equity estimates or a guarantee of future wins.
+
+The exact evaluator remains `FULL_PAIR_v04`. Both evaluator modes are independently
+testable, with no dynamic switching. `STRATEGY` is fixed before each half;
+`v04` remains available as the frozen control for reproduction.
 The experimental launcher under `research/` sets a mode before `new_half`; it is
 excluded from the submission image. All mutable match state resets in `new_half`.
 Diagnostics are disabled in the production server. The research server exposes
@@ -89,10 +100,16 @@ image with `research/` mounted read-only and output under `/tmp`. E0 uses
 `stress-41`/`stress-83`; development uses `dev-11`/`dev-29`; final audit uses
 `final-73`/`final-97` once after an approved freeze. A short debug run cannot pass E0.
 
-The [requirements matrix](reports/REQUIREMENTS.md) maps acceptance requirements
-to evidence. Raw CSVs, JSON registries, and JUnit output are in `reports/`.
-Thresholds remain provisional hypotheses; no optimization is claimed without
-controlled development evidence.
+The [current requirements matrix](reports/v05/REQUIREMENTS.md) maps this revision
+to evidence; [v0.4 acceptance evidence](reports/REQUIREMENTS.md) remains archived. Raw CSVs, JSON registries, and JUnit output are in `reports/`.
+Thresholds remain provisional hypotheses. The v0.5 comparisons and rejected
+variants are archived under `reports/v05/`; original final seeds were not reused.
+The initial v0.5 audit (19 wins, one chop) is retained under `reports/v05/`.
+The subsequent single-axis refinement and its separately registered seeds,
+selection and final freeze are under `reports/v05b/`. Both phases are included
+in the current release report. No disclosed final seed was reused. The old `freeze_mode.py`,
+`select_policy.py`, and `finalize_configuration.py` scripts reproduce the historical
+v0.4 experiment; they intentionally refuse to overwrite existing frozen evidence.
 
 For submission, complete mandatory gates, verify registration and team name,
 push the desired `licheng` commit, and copy the full SHA with `git rev-parse HEAD`.

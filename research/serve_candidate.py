@@ -7,6 +7,7 @@ ROOT = Path('/app') if Path('/app/agent.py').exists() else Path(__file__).resolv
 sys.path.insert(0, str(ROOT))
 import agent
 from poker_eval import MODES
+from poker_policy import STRATEGIES
 
 mode = os.environ['PB_MODE']
 if mode not in MODES:
@@ -15,6 +16,9 @@ agent.EVALUATION_MODE = mode
 agent.ADAPTATION = os.environ.get('PB_ADAPTATION', '1') == '1'
 agent.PURE_BLUFFS = os.environ.get('PB_PURE_BLUFFS', '1') == '1'
 agent.DIAGNOSTICS = True
+agent.STRATEGY = os.environ.get('PB_STRATEGY', 'v04')
+if agent.STRATEGY not in STRATEGIES:
+    raise ValueError('unknown fixed strategy configuration')
 # Research-only exit dump: errors are visible even when hooks contain exceptions.
 import json
 @agent.app.get('/research/state')

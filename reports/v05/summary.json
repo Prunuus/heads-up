@@ -1,0 +1,33 @@
+{
+  "strategy": "v05_limp20",
+  "parameters": {
+    "strong_defense": true,
+    "medium_defense": true,
+    "preflop_floor": 20,
+    "trap": true,
+    "limp_aggressive": true,
+    "aggression_first": true
+  },
+  "mode": "FULL_PAIR_v04",
+  "final_matches": 20,
+  "final_wins": 20,
+  "final_chops": 0,
+  "final_losses": 0,
+  "observed_final_match_win_percent": 100.0,
+  "engineering_pass": true,
+  "all_wins_audit_target_met": true,
+  "selected_full_http_matches": 48,
+  "selected_hands": 96000,
+  "selected_errors": 0,
+  "selected_internal_errors": 0,
+  "selected_max_charged_seconds": 2.390057,
+  "selected_max_post_ms": 41.20873400825076,
+  "selected_max_startup_seconds": 2.563708208996104,
+  "all_attempted_http_matches": 136,
+  "prior_phase_a_audit": {
+    "wins": 19,
+    "chops": 1,
+    "losses": 0
+  },
+  "future_win_guarantee": false
+}

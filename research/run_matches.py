@@ -48,12 +48,13 @@ def latency(values):
                for p in (50, 95, 99)}}
 
 
-def run_half(mode, opponent, seed, half, out, adaptation, bluffs, deals):
+def run_half(mode, opponent, seed, half, out, adaptation, bluffs, deals, strategy='v04', keep_logs=False):
     alias = {'call_heavy': 'baseline_calling_station', 'max_raise': 'baseline_always_pot'}
     script = ROOT / 'baseline-bots' / (alias.get(opponent, opponent) + '.py')
     name = f'{mode}_{opponent}_{seed}_{half}'
     env = dict(os.environ, PORT='5008', PB_MODE=mode, PB_ADAPTATION=str(int(adaptation)),
-               PB_PURE_BLUFFS=str(int(bluffs)), PB_MEMORY_OUTPUT=str(out / (name + '_memory.json')))
+               PB_PURE_BLUFFS=str(int(bluffs)), PB_STRATEGY=strategy,
+               PB_MEMORY_OUTPUT=str(out / (name + '_memory.json')))
     logfile = (out / (name + '.log')).open('w')
     start = time.perf_counter()
     processes = []
@@ -66,7 +67,7 @@ def run_half(mode, opponent, seed, half, out, adaptation, bluffs, deals):
         if not all(h.wait_healthy(12.) for h in handles):
             raise RuntimeError('startup health failed')
         startup = time.perf_counter() - start
-        result = play_half(*handles, seed, half, deals, keep_logs=False)
+        result = play_half(*handles, seed, half, deals, keep_logs=keep_logs)
         raw = result.to_dict()
         extra = {'startup_seconds': startup, 'candidate_latency': latency(handles[0].latencies),
                  'opponent_latency': latency(handles[1].latencies)}

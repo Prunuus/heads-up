@@ -1,0 +1,12 @@
+{
+  "PREFLOP": 4274,
+  "chosen_RAISE_HALF": 1400,
+  "raise_cap": 441,
+  "aggressive_profile": 9943,
+  "chosen_CHECK_CALL": 6652,
+  "FLOP": 3456,
+  "chosen_FOLD": 1834,
+  "TURN": 1650,
+  "RIVER": 621,
+  "chosen_RAISE_POT": 115
+}

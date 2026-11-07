@@ -207,7 +207,7 @@ def test_ten_thousand_reachable_decisions():
     assert all(coverage[f"street_{s.name}"] > 100 for s in Street)
     assert all(coverage[f"chosen_{a.name}"] > 0 for a in Action)
     assert coverage["raise_cap"] > 10
-    Path("reports/reachability.json").write_text(json.dumps(dict(coverage), indent=2))
+    Path("reports/v05/reachability_control.json").write_text(json.dumps(dict(coverage), indent=2))
 
 
 @pytest.mark.parametrize("i", range(100))

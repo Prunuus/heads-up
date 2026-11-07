@@ -1,0 +1,29 @@
+{
+  "utc": "2026-11-07T21:16:28.256091+00:00",
+  "strategy": "v05_aggressive_limp",
+  "mode": "FULL_PAIR_v04",
+  "sampler_salt": 0,
+  "adaptation": true,
+  "pure_bluffs": false,
+  "status": "FROZEN_BEFORE_FINAL",
+  "hashes": {
+    "agent.py": "f6ce8f1ec78d4c0f1263df81ecd84af40b85d6c1f1a89f129c2fed759305f94b",
+    "poker_eval.py": "c9870efdff3b09dff732ca9c8db0ab5dcb1b5869c40291b3c48c1ab1968399d3",
+    "poker_memory.py": "d22302023af8ea685131de239341f07eca38bece6e964b726b7a6e302a31cc7c",
+    "poker_policy.py": "d6494fdf32742d7cbe0dbd10c3fef11df492ea9063c5f5b59ad6293342d9e753",
+    "game.py": "bc00e3c2d1bf64cbd36bf5553dae218767f11b20f388e5c417d989919877f2db",
+    "judge_engine.py": "fa7a7e3fb49c09588cfcf0930a8e3f6c189e419dbc54263ae7d53b953223d422",
+    "evaluator.py": "e2a151a4c41828a035030f490c91b81015d04bc209abfb860ca3d0dce649e0b4",
+    "requirements.txt": "5dcc7f7e055be6ada8bec3c31d4a507075882c31ca0f89ba89eb2596a7d41df7"
+  },
+  "selection_sha256": "486f3d32db7206a2f5aec002728d226462118d705bac8a077e46e908422c81b6",
+  "plan_sha256": "b03d1773656d7fe2200e801e1a38b1e27163a44233cd9ce77787e6f5f08e4fc4",
+  "legacy_evaluator_freeze": {
+    "reports\\E0\\registry.json": "9aee384ac2dadec8f13ec5ba700a876be43d67edf9a379fa5bccc23082daaa8e",
+    "reports\\accuracy.json": "9173b232702d0091dda6f1cc12754fb50a849cee3bb358d5642f34f5c57611b0",
+    "reports\\correctness.xml": "463233fdfe62b362c98bedbe0f3a927b107c72b9adfd8668ac131d9f25a4753c",
+    "reports\\official_build.log": "bb77c948f9a575eb7f7f83395e1b8d523b38aa0470c0bf8a2ac050d0ef7c96b3"
+  },
+  "note": "Evaluator and sampler are unchanged. The user authorized policy changes; final audit uses new preregistered seeds.",
+  "configuration_hash": "151296686687a6852b1a3deadb22e96c2c1fbf7a6da9938c49b319e9ebd64063"
+}

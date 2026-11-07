@@ -1,0 +1,32 @@
+{
+  "utc": "2026-11-07T21:34:43.627087+00:00",
+  "status": "FROZEN_BEFORE_NEW_FINAL",
+  "strategy": "v05_limp20",
+  "parameters": {
+    "strong_defense": true,
+    "medium_defense": true,
+    "preflop_floor": 20,
+    "trap": true,
+    "limp_aggressive": true,
+    "aggression_first": true
+  },
+  "mode": "FULL_PAIR_v04",
+  "adaptation": true,
+  "pure_bluffs": false,
+  "sampler_salt": 0,
+  "hashes": {
+    "agent.py": "6d0c53e8a021ece7ce651de0e6d1e0be635af2e762af1a4b3b3c54cb570c2164",
+    "poker_eval.py": "c9870efdff3b09dff732ca9c8db0ab5dcb1b5869c40291b3c48c1ab1968399d3",
+    "poker_memory.py": "d22302023af8ea685131de239341f07eca38bece6e964b726b7a6e302a31cc7c",
+    "poker_policy.py": "02324306a88197c98bccc0d550976af8b4addddc823a6b889d6a8df41c1a00d9",
+    "game.py": "bc00e3c2d1bf64cbd36bf5553dae218767f11b20f388e5c417d989919877f2db",
+    "judge_engine.py": "fa7a7e3fb49c09588cfcf0930a8e3f6c189e419dbc54263ae7d53b953223d422",
+    "evaluator.py": "e2a151a4c41828a035030f490c91b81015d04bc209abfb860ca3d0dce649e0b4",
+    "requirements.txt": "5dcc7f7e055be6ada8bec3c31d4a507075882c31ca0f89ba89eb2596a7d41df7"
+  },
+  "plan_sha256": "7e447451fe6d9f631d451f7be10e2937ed5756c800ba2233e3885a60af9f43f7",
+  "selection_sha256": "89b0eef1663377cdeb40f1d6ffa8c532641d8276582e73e4802513eb235e4832",
+  "prior_audit": "reports/v05/final/registry.json (19 wins, 1 chop, 0 losses; never reused)",
+  "note": "Only conditional preflop defense floor changed from phase A; selection used new development/confirmation data only.",
+  "configuration_hash": "303a20d92b79b42150f6ebb73a35724aaaade9bd810b43a5d439c60b8f721cfe"
+}

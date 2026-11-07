@@ -1,9 +1,44 @@
 """Frozen v0.4 first-matching decision trees and legal-action guards."""
 from game import Action, Observation, Street
+from dataclasses import dataclass
 from poker_eval import FULL, REDUCED, assess, preflop_score
 from poker_memory import diagnostic, ingest, profile, remember_raise
 
 CC, FOLD, HALF, POT = Action.CHECK_CALL, Action.FOLD, Action.RAISE_HALF, Action.RAISE_POT
+
+
+@dataclass(frozen=True)
+class Strategy:
+    strong_defense: bool = False
+    medium_defense: bool = False
+    preflop_floor: int = 101
+    trap: bool = False
+    limp_aggressive: bool = False
+    aggression_first: bool = False
+
+
+# One fixed configuration per half. v04 remains the reproducible control.
+STRATEGIES = {
+    'v04': Strategy(),
+    'v05_price': Strategy(strong_defense=True),
+    'v05_medium': Strategy(True, True),
+    'v05_defend35': Strategy(True, True, 35),
+    'v05_defend30': Strategy(True, True, 30),
+    'v05_trap': Strategy(True, True, 30, True),
+    'v05_limp': Strategy(True, True, 30, True, True),
+    'v05_profile': Strategy(aggression_first=True),
+    'v05_aggressive30': Strategy(True, True, 30, True, False, True),
+    'v05_aggressive_limp': Strategy(True, True, 30, True, True, True),
+    'v05_limp20': Strategy(True, True, 20, True, True, True),
+    'v05_limp25': Strategy(True, True, 25, True, True, True),
+    'v05_limp35': Strategy(True, True, 35, True, True, True),
+    'v05_limp40': Strategy(True, True, 40, True, True, True),
+    'v05_limp45': Strategy(True, True, 45, True, True, True),
+}
+
+
+def strategy(memory):
+    return STRATEGIES[memory.get('strategy', 'v04')]
 
 
 def fallback(obs):
@@ -65,11 +100,14 @@ def price(obs):
 def preflop(obs, memory, label, fold_pre):
     s = preflop_score(obs.hole_cards)
     cfg = memory["config"]
+    policy = strategy(memory)
     if (obs.is_button and not obs.action_history and obs.raises_this_street == 0
             and obs.my_bet == cfg.small_blind and obs.opp_bet == obs.big_blind
             and obs.to_call == obs.big_blind - cfg.small_blind):
         if s < 20:
             return FOLD
+        if label == 'AGGRESSIVE' and policy.limp_aggressive:
+            return CC
         half, pot = (45, 65) if label == "STATION" else ((35, 55) if memory["adaptation"] and memory["resolved_pre"] >= 12 and fold_pre >= .52 else (40, 60))
         intended = POT if s >= pot else HALF if s >= half else CC
         return intended if intended == CC or raise_valid(obs, intended) else CC
@@ -89,9 +127,13 @@ def preflop(obs, memory, label, fold_pre):
     ceiling -= .05 * (obs.raises_this_street >= 2) + .04 * (label == "TIGHT")
     ceiling += .02 * (label == "AGGRESSIVE")
     ceiling = round(max(.05, min(.34, ceiling)), 12)
+    if label == 'AGGRESSIVE' and s >= policy.preflop_floor:
+        ceiling = .34
     p = price(obs)
     if p > ceiling:
         return FOLD
+    if label == 'AGGRESSIVE' and policy.trap:
+        return CC
     if obs.raises_this_street == 1 and p <= ceiling - .04:
         if s >= 80 and raise_valid(obs, POT, .65):
             return POT
@@ -100,7 +142,8 @@ def preflop(obs, memory, label, fold_pre):
     return CC
 
 
-def call_ceiling(obs, a, label):
+def call_ceiling(obs, a, label, configuration='v04'):
+    policy = STRATEGIES[configuration]
     base = {"WEAK": (.12, .10, .08), "MEDIUM": (.27, .26, .26),
             "STRONG": (.34,) * 3, "NUTS": (.34,) * 3}[a.tier][obs.street - 1]
     if obs.street != Street.RIVER and a.draw >= .10:
@@ -111,6 +154,9 @@ def call_ceiling(obs, a, label):
     base -= .04 * (last is not None and last.action == POT)
     base -= .04 * (obs.raises_this_street >= 2)
     base -= .03 * (a.tier in ("WEAK", "MEDIUM") and a.danger)
+    if label == 'AGGRESSIVE' and ((policy.strong_defense and a.tier == 'STRONG')
+                                  or (policy.medium_defense and a.tier == 'MEDIUM')):
+        return .34
     return .34 if a.locked else round(max(.03, min(.34, base)), 12)
 
 
@@ -119,9 +165,11 @@ def postflop(obs, memory, a, label, fold_post):
     k = a.category
     spr = min(obs.my_stack, obs.opp_stack) / max(obs.pot, 1)
     if min(obs.to_call, obs.my_stack) > 0:
-        ceiling = call_ceiling(obs, a, label)
+        ceiling = call_ceiling(obs, a, label, memory.get('strategy', 'v04'))
         if price(obs) > ceiling:
             return FOLD
+        if label == 'AGGRESSIVE' and strategy(memory).trap:
+            return CC
         if a.locked:
             if a.tie < .30 and label in ("STATION", "AGGRESSIVE") and raise_valid(obs, POT):
                 return POT
@@ -183,7 +231,7 @@ def choose(obs, memory):
     try:
         validate(obs, memory)
         ingest(obs, memory)
-        label, fp, fq = profile(memory)
+        label, fp, fq = profile(memory, aggression_first=strategy(memory).aggression_first)
         if obs.street == Street.PREFLOP:
             action = preflop(obs, memory, label, fp)
         else:

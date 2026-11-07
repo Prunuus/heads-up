@@ -1,0 +1,225 @@
+{
+  "utc": "2026-11-07T21:16:28.242531+00:00",
+  "selected": "v05_aggressive_limp",
+  "rule": "After full HTTP train/confirmation runs, require promotion versus frozen v04 control on train seeds. Among eligible candidates choose highest minimum per-match paired 95% CI lower bound across train+confirmation. Tie: highest mean BB, then simpler configuration. Both candidates already won all eight initial development screens; no final seeds have been accessed.",
+  "candidates": {
+    "v05_aggressive30": {
+      "eligible": false,
+      "runtime_pass": false,
+      "point_delta": 4.0,
+      "mean_delta_bb": 2.7549375,
+      "worst_match_ci_lower": 0.3457516477981799,
+      "mean_paired_bb": 2.9895,
+      "wins": 16,
+      "matches": 16,
+      "per_opponent_point_delta": {
+        "baseline_random": 2.0,
+        "baseline_calling_station": 0.0,
+        "baseline_always_half": 0.0,
+        "baseline_always_pot": 2.0
+      },
+      "comparisons": [
+        {
+          "opponent": "baseline_random",
+          "seed": "dev-v05-101",
+          "mean_delta_bb": 4.0955,
+          "variance_delta": 305.0081378878879,
+          "ci_delta": [
+            3.0130401797248503,
+            5.1779598202751504
+          ],
+          "point_delta": 1.0
+        },
+        {
+          "opponent": "baseline_random",
+          "seed": "dev-v05-131",
+          "mean_delta_bb": 4.757,
+          "variance_delta": 341.72467567567566,
+          "ci_delta": [
+            3.611238456712883,
+            5.9027615432871166
+          ],
+          "point_delta": 1.0
+        },
+        {
+          "opponent": "baseline_calling_station",
+          "seed": "dev-v05-101",
+          "mean_delta_bb": 0.0,
+          "variance_delta": 0.0,
+          "ci_delta": [
+            0.0,
+            0.0
+          ],
+          "point_delta": 0.0
+        },
+        {
+          "opponent": "baseline_calling_station",
+          "seed": "dev-v05-131",
+          "mean_delta_bb": 0.0,
+          "variance_delta": 0.0,
+          "ci_delta": [
+            0.0,
+            0.0
+          ],
+          "point_delta": 0.0
+        },
+        {
+          "opponent": "baseline_always_half",
+          "seed": "dev-v05-101",
+          "mean_delta_bb": 0.863,
+          "variance_delta": 274.4666976976977,
+          "ci_delta": [
+            -0.1638355593158407,
+            1.8898355593158407
+          ],
+          "point_delta": 0.0
+        },
+        {
+          "opponent": "baseline_always_half",
+          "seed": "dev-v05-131",
+          "mean_delta_bb": 2.609,
+          "variance_delta": 284.2543733733734,
+          "ci_delta": [
+            1.564015980624033,
+            3.653984019375967
+          ],
+          "point_delta": 0.0
+        },
+        {
+          "opponent": "baseline_always_pot",
+          "seed": "dev-v05-101",
+          "mean_delta_bb": 4.521,
+          "variance_delta": 658.3619209209209,
+          "ci_delta": [
+            2.930665709540975,
+            6.111334290459025
+          ],
+          "point_delta": 1.0
+        },
+        {
+          "opponent": "baseline_always_pot",
+          "seed": "dev-v05-131",
+          "mean_delta_bb": 5.194,
+          "variance_delta": 622.1124764764764,
+          "ci_delta": [
+            3.648067501592637,
+            6.739932498407363
+          ],
+          "point_delta": 1.0
+        }
+      ]
+    },
+    "v05_aggressive_limp": {
+      "eligible": true,
+      "runtime_pass": true,
+      "point_delta": 4.0,
+      "mean_delta_bb": 2.9271249999999998,
+      "worst_match_ci_lower": 0.6468167872418611,
+      "mean_paired_bb": 3.1219687499999997,
+      "wins": 16,
+      "matches": 16,
+      "per_opponent_point_delta": {
+        "baseline_random": 2.0,
+        "baseline_calling_station": 0.0,
+        "baseline_always_half": 0.0,
+        "baseline_always_pot": 2.0
+      },
+      "comparisons": [
+        {
+          "opponent": "baseline_random",
+          "seed": "dev-v05-101",
+          "mean_delta_bb": 4.9635,
+          "variance_delta": 273.7471649149149,
+          "ci_delta": [
+            3.938011282979117,
+            5.988988717020883
+          ],
+          "point_delta": 1.0
+        },
+        {
+          "opponent": "baseline_random",
+          "seed": "dev-v05-131",
+          "mean_delta_bb": 5.4155,
+          "variance_delta": 274.4590688188188,
+          "ci_delta": [
+            4.388678711374577,
+            6.442321288625423
+          ],
+          "point_delta": 1.0
+        },
+        {
+          "opponent": "baseline_calling_station",
+          "seed": "dev-v05-101",
+          "mean_delta_bb": 0.0,
+          "variance_delta": 0.0,
+          "ci_delta": [
+            0.0,
+            0.0
+          ],
+          "point_delta": 0.0
+        },
+        {
+          "opponent": "baseline_calling_station",
+          "seed": "dev-v05-131",
+          "mean_delta_bb": 0.0,
+          "variance_delta": 0.0,
+          "ci_delta": [
+            0.0,
+            0.0
+          ],
+          "point_delta": 0.0
+        },
+        {
+          "opponent": "baseline_always_half",
+          "seed": "dev-v05-101",
+          "mean_delta_bb": 0.041,
+          "variance_delta": 273.648967967968,
+          "ci_delta": [
+            -0.9843047719316175,
+            1.0663047719316174
+          ],
+          "point_delta": 0.0
+        },
+        {
+          "opponent": "baseline_always_half",
+          "seed": "dev-v05-131",
+          "mean_delta_bb": 1.661,
+          "variance_delta": 283.8178968968969,
+          "ci_delta": [
+            0.6168185824680084,
+            2.7051814175319917
+          ],
+          "point_delta": 0.0
+        },
+        {
+          "opponent": "baseline_always_pot",
+          "seed": "dev-v05-101",
+          "mean_delta_bb": 5.01,
+          "variance_delta": 629.8337337337337,
+          "ci_delta": [
+            3.4545035289299073,
+            6.565496471070093
+          ],
+          "point_delta": 1.0
+        },
+        {
+          "opponent": "baseline_always_pot",
+          "seed": "dev-v05-131",
+          "mean_delta_bb": 6.326,
+          "variance_delta": 581.6313553553554,
+          "ci_delta": [
+            4.831210712263051,
+            7.8207892877369485
+          ],
+          "point_delta": 1.0
+        }
+      ]
+    }
+  },
+  "registry_sha256": {
+    "reports\\v05\\http_dev_v05_aggressive30\\registry.json": "9bfc8cf4cc93b9bf4fd6a0f2a91a16fbf3a990b512710c78e9b5c8be59d6f359",
+    "reports\\v05\\http_confirm_v05_aggressive30\\registry.json": "ccf34bfa814911cf04ffd4876fe9204a1d749aaac4e7a35ee650933e898f0b5a",
+    "reports\\v05\\http_dev_v05_aggressive_limp\\registry.json": "5d2245944d560f0372d6bbe0f336a7b76decfe5c52cd3e133783b9b04671dd75",
+    "reports\\v05\\http_confirm_v05_aggressive_limp\\registry.json": "fdc40e222d5c5fb21cd92585646c142c16d9d25120a4be63325f63bc317ba862"
+  }
+}

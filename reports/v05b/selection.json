@@ -1,0 +1,224 @@
+{
+  "utc": "2026-11-07T21:34:43.616350+00:00",
+  "control": "v05_aggressive_limp",
+  "candidate": "v05_limp20",
+  "promote": true,
+  "selected": "v05_limp20",
+  "candidate_wins": 16,
+  "candidate_matches": 16,
+  "runtime_pass": true,
+  "mean_delta_bb": 0.4709375,
+  "per_opponent_delta_bb": {
+    "baseline_random": 0.43274999999999997,
+    "baseline_calling_station": 0.0,
+    "baseline_always_half": 0.92225,
+    "baseline_always_pot": 0.5287499999999999
+  },
+  "per_opponent_point_delta": {
+    "baseline_random": 0.0,
+    "baseline_calling_station": 0.0,
+    "baseline_always_half": 0.0,
+    "baseline_always_pot": 0.0
+  },
+  "comparisons": [
+    {
+      "stage": "dev",
+      "opponent": "baseline_random",
+      "seed": "dev-v05b-401",
+      "mean_delta_bb": 1.135,
+      "variance_delta": 416.90017517517515,
+      "ci_delta": [
+        -0.1305290249350084,
+        2.4005290249350084
+      ],
+      "point_delta": 0.0
+    },
+    {
+      "stage": "dev",
+      "opponent": "baseline_random",
+      "seed": "dev-v05b-409",
+      "mean_delta_bb": 0.7905,
+      "variance_delta": 443.0098696196197,
+      "ci_delta": [
+        -0.5140561372094077,
+        2.095056137209408
+      ],
+      "point_delta": 0.0
+    },
+    {
+      "stage": "dev",
+      "opponent": "baseline_calling_station",
+      "seed": "dev-v05b-401",
+      "mean_delta_bb": 0.0,
+      "variance_delta": 0.0,
+      "ci_delta": [
+        0.0,
+        0.0
+      ],
+      "point_delta": 0.0
+    },
+    {
+      "stage": "dev",
+      "opponent": "baseline_calling_station",
+      "seed": "dev-v05b-409",
+      "mean_delta_bb": 0.0,
+      "variance_delta": 0.0,
+      "ci_delta": [
+        0.0,
+        0.0
+      ],
+      "point_delta": 0.0
+    },
+    {
+      "stage": "dev",
+      "opponent": "baseline_always_half",
+      "seed": "dev-v05b-401",
+      "mean_delta_bb": 1.1,
+      "variance_delta": 131.7057057057057,
+      "ci_delta": [
+        0.38869089768298415,
+        1.811309102317016
+      ],
+      "point_delta": 0.0
+    },
+    {
+      "stage": "dev",
+      "opponent": "baseline_always_half",
+      "seed": "dev-v05b-409",
+      "mean_delta_bb": 1.093,
+      "variance_delta": 129.641992992993,
+      "ci_delta": [
+        0.3872856949998237,
+        1.7987143050001762
+      ],
+      "point_delta": 0.0
+    },
+    {
+      "stage": "dev",
+      "opponent": "baseline_always_pot",
+      "seed": "dev-v05b-401",
+      "mean_delta_bb": 0.497,
+      "variance_delta": 272.2061971971972,
+      "ci_delta": [
+        -0.5255983215088674,
+        1.5195983215088673
+      ],
+      "point_delta": 0.0
+    },
+    {
+      "stage": "dev",
+      "opponent": "baseline_always_pot",
+      "seed": "dev-v05b-409",
+      "mean_delta_bb": 0.697,
+      "variance_delta": 268.13332432432435,
+      "ci_delta": [
+        -0.31791919812580394,
+        1.7119191981258037
+      ],
+      "point_delta": 0.0
+    },
+    {
+      "stage": "confirm",
+      "opponent": "baseline_random",
+      "seed": "dev-v05b-419",
+      "mean_delta_bb": 0.137,
+      "variance_delta": 430.4586896896897,
+      "ci_delta": [
+        -1.1489432733646971,
+        1.4229432733646972
+      ],
+      "point_delta": 0.0
+    },
+    {
+      "stage": "confirm",
+      "opponent": "baseline_random",
+      "seed": "dev-v05b-431",
+      "mean_delta_bb": -0.3315,
+      "variance_delta": 391.22558333333336,
+      "ci_delta": [
+        -1.5574413529746574,
+        0.8944413529746574
+      ],
+      "point_delta": 0.0
+    },
+    {
+      "stage": "confirm",
+      "opponent": "baseline_calling_station",
+      "seed": "dev-v05b-419",
+      "mean_delta_bb": 0.0,
+      "variance_delta": 0.0,
+      "ci_delta": [
+        0.0,
+        0.0
+      ],
+      "point_delta": 0.0
+    },
+    {
+      "stage": "confirm",
+      "opponent": "baseline_calling_station",
+      "seed": "dev-v05b-431",
+      "mean_delta_bb": 0.0,
+      "variance_delta": 0.0,
+      "ci_delta": [
+        0.0,
+        0.0
+      ],
+      "point_delta": 0.0
+    },
+    {
+      "stage": "confirm",
+      "opponent": "baseline_always_half",
+      "seed": "dev-v05b-419",
+      "mean_delta_bb": 0.281,
+      "variance_delta": 118.62065965965967,
+      "ci_delta": [
+        -0.3940504619275129,
+        0.956050461927513
+      ],
+      "point_delta": 0.0
+    },
+    {
+      "stage": "confirm",
+      "opponent": "baseline_always_half",
+      "seed": "dev-v05b-431",
+      "mean_delta_bb": 1.215,
+      "variance_delta": 155.203978978979,
+      "ci_delta": [
+        0.44283965030205963,
+        1.9871603496979406
+      ],
+      "point_delta": 0.0
+    },
+    {
+      "stage": "confirm",
+      "opponent": "baseline_always_pot",
+      "seed": "dev-v05b-419",
+      "mean_delta_bb": 0.037,
+      "variance_delta": 249.7894204204204,
+      "ci_delta": [
+        -0.9425871770736319,
+        1.0165871770736319
+      ],
+      "point_delta": 0.0
+    },
+    {
+      "stage": "confirm",
+      "opponent": "baseline_always_pot",
+      "seed": "dev-v05b-431",
+      "mean_delta_bb": 0.884,
+      "variance_delta": 302.27081481481474,
+      "ci_delta": [
+        -0.1935915562923608,
+        1.961591556292361
+      ],
+      "point_delta": 0.0
+    }
+  ],
+  "registry_sha256": {
+    "reports\\v05b\\http_dev_v05_aggressive_limp\\registry.json": "8ddf4761c96d29662a352a369c8163921283232661553dbdd9c80adf1f0f6267",
+    "reports\\v05b\\http_dev_v05_limp20\\registry.json": "d8d686047836026e85dd26038459cfc2f4f7f906fdd096d31159c84acd184cff",
+    "reports\\v05b\\http_confirm_v05_aggressive_limp\\registry.json": "13af0541d16648e3fdf063b1b8c4b99ad617753a756cfc303a991bd22002baa9",
+    "reports\\v05b\\http_confirm_v05_limp20\\registry.json": "a9dda0e059a6d88a39f9c31d34c1c30a6a34ced5da45e6511221e296c97c7665"
+  },
+  "rule": "Screen on new development seeds. Rank by minimum per-match CI lower bound; ties by mean paired BB. Confirm best candidate via full HTTP against control on train and confirmation seeds. Promote only if all 16 candidate HTTP matches win, candidate gains >=0.25 mean paired BB/deal overall, improves AlwaysPot mean by >=0.5 BB/deal, no opponent loses >=1 match point or >=0.5 mean BB/deal. If none qualify retain phase A. Both candidates already at match-point ceiling can improve confidence/BB instead of impossible +0.5 points."
+}

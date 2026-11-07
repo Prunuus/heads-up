@@ -49,17 +49,19 @@ from poker_eval import FULL
 from poker_memory import initialize, finish
 from poker_policy import choose
 
-# Mode approved by E0/E1; flags selected on development seeds only.
-# Evidence: reports/freeze.json and reports/policy_selection.json.
+# FULL evaluator remains qualified; v0.5 strategy selected on fresh
+# development/confirmation seeds. Evidence: reports/v05b/selection.json.
 # Research launchers set constants BEFORE new_half; never switch within a half.
 EVALUATION_MODE = FULL
 ADAPTATION = True
 PURE_BLUFFS = False
 DIAGNOSTICS = False
+STRATEGY = 'v05_limp20'
 
 
 def new_half(config: AgentConfig, memory: dict) -> None:
     initialize(config, memory, EVALUATION_MODE, ADAPTATION, PURE_BLUFFS, DIAGNOSTICS)
+    memory['strategy'] = STRATEGY
 
 
 def choose_action(obs: Observation, memory: dict) -> Action:
