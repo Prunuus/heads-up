@@ -2,6 +2,7 @@ from itertools import combinations
 from time import perf_counter
 
 import numpy as np
+import pytest
 
 import evaluator as ev
 from bot.fasteval import (PAIR_IDX, TRIPLE_IDX, made_now_batch, omaha_batch,
@@ -89,6 +90,108 @@ def test_made_now_on_flop_equals_bruteforce():
 
 def test_index_arrays():
     assert PAIR_IDX.shape == (10, 2) and TRIPLE_IDX.shape == (10, 3)
+
+
+# ---- shapes: one hole vs many boards, many holes vs one board, equal rows (audit I2)
+
+def _one_and_many(rng, n, k_one, k_many):
+    """One row of k_one cards and n rows of k_many cards, none sharing a card with the one row."""
+    perm = rng.permutation(36)
+    one, rest = perm[:k_one], perm[k_one:]
+    many = rest[np.argsort(rng.random((n, len(rest))), axis=1)[:, :k_many]]
+    return one[None, :].astype(np.int64), many.astype(np.int64)
+
+
+def _made_ref(hole, board):
+    return max(ev.score_five([hole[i] for i in p] + [board[j] for j in t])
+               for p in combinations(range(5), 2) for t in combinations(range(len(board)), 3))
+
+
+def _pairs(holes, boards):
+    """Row pairs the way a (1,k) operand broadcasts against an (n,k) one."""
+    n = max(len(holes), len(boards))
+    H = holes.tolist() * n if len(holes) == 1 else holes.tolist()
+    B = boards.tolist() * n if len(boards) == 1 else boards.tolist()
+    return list(zip(H, B))
+
+
+@pytest.mark.parametrize("n_holes,n_boards", [(1, 60), (60, 1), (60, 60), (1, 1)])
+def test_omaha_batch_every_row_combination_matches_omaha_score(n_holes, n_boards):
+    rng = np.random.default_rng(1000 + 7 * n_holes + n_boards)
+    if n_holes == n_boards:
+        d = _deal(rng, n_holes, 10)
+        holes, boards = d[:, :5], d[:, 5:]
+    elif n_holes == 1:
+        holes, boards = _one_and_many(rng, n_boards, 5, 5)
+    else:
+        boards, holes = _one_and_many(rng, n_holes, 5, 5)
+    got = omaha_batch(holes, boards)
+    want = [ev.omaha_score(h, b) for h, b in _pairs(holes, boards)]
+    assert got.shape == (max(n_holes, n_boards),)
+    assert got.tolist() == want
+
+
+@pytest.mark.parametrize("width", [3, 4, 5])
+@pytest.mark.parametrize("n_holes,n_boards", [(1, 40), (40, 1), (40, 40), (1, 1)])
+def test_made_now_batch_every_row_combination_matches_bruteforce(width, n_holes, n_boards):
+    rng = np.random.default_rng(2000 + 100 * width + 7 * n_holes + n_boards)
+    if n_holes == n_boards:
+        d = _deal(rng, n_holes, 5 + width)
+        holes, boards = d[:, :5], d[:, 5:]
+    elif n_holes == 1:
+        holes, boards = _one_and_many(rng, n_boards, 5, width)
+    else:
+        boards, holes = _one_and_many(rng, n_holes, width, 5)
+    got = made_now_batch(holes, boards)
+    want = [_made_ref(h, b) for h, b in _pairs(holes, boards)]
+    assert got.shape == (max(n_holes, n_boards),)
+    assert got.tolist() == want
+
+
+def test_one_hole_against_many_boards_is_per_board_not_the_max():
+    # Kc Ks As Ah Ad: quad kings on the first board, only a pair of aces on the second.
+    hole = np.array([ev.cards_from_str("Kc Ks As Ah Ad")])
+    boards = np.array([ev.cards_from_str("Kh Kd 7c 8c 9d"), ev.cards_from_str("6c 7d 8h Ts Jd")])
+    got = omaha_batch(hole, boards)
+    assert got.tolist() == [ev.omaha_score(hole[0].tolist(), b) for b in boards.tolist()]
+    assert got[0] > got[1]
+
+
+def test_zero_rows_give_an_empty_result():
+    for holes, boards in (((0, 5), (0, 5)), ((1, 5), (0, 5)), ((0, 5), (1, 5))):
+        got = omaha_batch(np.zeros(holes, dtype=np.int64), np.zeros(boards, dtype=np.int64))
+        assert got.shape == (0,) and got.dtype == np.int32
+    got = made_now_batch(np.zeros((1, 5), dtype=np.int64), np.zeros((0, 3), dtype=np.int64))
+    assert got.shape == (0,)
+    assert score5_batch(np.zeros((0, 5), dtype=np.int64)).shape == (0,)
+
+
+@pytest.mark.parametrize("holes,boards", [
+    ((3, 5), (5, 5)),       # row counts differ and neither is 1
+    ((5,), (4, 5)),         # 1-D hole
+    ((4, 5), (5,)),         # 1-D board
+    ((4, 6), (4, 5)),       # six hole cards: the sixth would be ignored
+    ((4, 4), (4, 5)),       # four hole cards
+    ((4, 5), (4, 3)),       # omaha_batch needs the full 5-card board
+    ((4, 5, 1), (4, 5)),    # 3-D
+])
+def test_omaha_batch_rejects_unsupported_shapes(holes, boards):
+    with pytest.raises(ValueError):
+        omaha_batch(np.zeros(holes, dtype=np.int64), np.zeros(boards, dtype=np.int64))
+
+
+@pytest.mark.parametrize("holes,boards", [
+    ((3, 5), (5, 3)), ((5,), (4, 3)), ((4, 6), (4, 4)), ((4, 5), (4, 2)), ((4, 5), (4, 6)),
+])
+def test_made_now_batch_rejects_unsupported_shapes(holes, boards):
+    with pytest.raises(ValueError):
+        made_now_batch(np.zeros(holes, dtype=np.int64), np.zeros(boards, dtype=np.int64))
+
+
+@pytest.mark.parametrize("shape", [(5,), (4, 4), (4, 6), (2, 5, 1)])
+def test_score5_batch_rejects_unsupported_shapes(shape):
+    with pytest.raises(ValueError):
+        score5_batch(np.zeros(shape, dtype=np.int64))
 
 
 def test_speed():
