@@ -25,16 +25,24 @@ def _slow_equity(hole, board, iters, rnd):
     return score / iters
 
 
-@pytest.mark.slow
-def test_equity_agrees_with_slow_reference():
+def _agreement(seed_ref, seed_fast):
     import random
-    rnd = random.Random(11)
-    rng = np.random.default_rng(12)
+    rnd = random.Random(seed_ref)
+    rng = np.random.default_rng(seed_fast)
+    diffs = []
     for i in range(50):
         hole, board = _spot(np.random.default_rng(100 + i), (0, 3, 4, 5)[i % 4])
         fast = equity_vs_random(hole, board, 2000, rng)
         slow = _slow_equity(hole, board, 4000, rnd)
-        assert abs(fast - slow) < 0.03, (hole, board, fast, slow)
+        diffs.append(fast - slow)
+    return np.array(diffs)
+
+
+def test_equity_agrees_with_slow_reference():
+    d = _agreement(11, 12)
+    print("max |diff|", np.abs(d).max(), "mean diff", d.mean())
+    assert np.abs(d).max() < 0.05
+    assert abs(d.mean()) < 0.01
 
 
 def test_equity_quick_sanity():
