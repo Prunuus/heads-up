@@ -149,6 +149,25 @@ def _exact_strength(hole, board):
     return float(((ours > theirs).sum() + 0.5 * (ours == theirs).sum()) / len(theirs)), len(theirs)
 
 
+# ---- strength_now is the made hand now, not the runout (audit I6)
+
+@pytest.mark.parametrize("hole,board", [
+    ("Ah Jh Td 9c 7s", "9h 8h Kc"),     # middle pair, plus a wrap and the nut flush draw
+    ("Ah Jh Td 7c 6s", "9h 8h Kc"),     # ace high, plus a wrap and the nut flush draw
+])
+def test_strength_now_is_the_made_hand_not_the_runout(hole, board):
+    H, B = ev.cards_from_str(hole), ev.cards_from_str(board)
+    exact, n_opp = _exact_strength(H, B)
+    assert n_opp == 98_280                       # C(28, 5): every hole the opponent can hold
+    iters = 4000
+    s = strength_now(H, B, iters, np.random.default_rng(5))
+    se = (exact * (1 - exact) / iters) ** 0.5   # an upper bound: ties only shrink the variance
+    assert abs(s - exact) < 4 * se
+    # the draws are worth a lot of equity, and strength_now must not count them
+    e = equity_vs_random(H, B, iters, np.random.default_rng(6))
+    assert s < e - 0.15
+
+
 # ---- zero budget (audit I1): TimeManager.iters() returns 0 by design
 
 @pytest.mark.parametrize("iters", [0, -1, -256])
