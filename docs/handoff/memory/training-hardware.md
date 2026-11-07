@@ -5,10 +5,10 @@ metadata:
   node_type: memory
   type: user
   originSessionId: b4276c44-89ab-406f-9078-0e01542ecd72
-  modified: 2026-11-07T20:48:44.709Z
+  modified: 2026-11-07T22:43:58.866Z
 ---
 
-The user has access to a high-end CPU machine for offline training (stated 2026-11-07), so training doesn't have to fit their Mac (4 P-cores + 6 E-cores). The tournament bot itself still runs on 1 CPU at match time. Only offline work (dataset generation, MCCFR training) can use the big machine.
+The user has access to a home PC with a high-end CPU and a dedicated GPU for offline training (stated 2026-11-07), so training doesn't have to fit their Mac. The plan: the Mac stays the controller and drives the PC's jobs over SSH on the home network (tmux/nohup, logs, scp results back). The Mac needs key-based SSH and allow rules for Bash(ssh/scp/rsync). (The Mac has 4 performance cores and 6 efficiency cores.) The tournament bot itself still runs on 1 CPU at match time. Only offline work (dataset generation, MCCFR training) can use the big machine.
 
 **Why:** they don't want training compute capped by the laptop.
 

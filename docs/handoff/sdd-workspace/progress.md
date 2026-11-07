@@ -146,3 +146,18 @@ Ruling R28: Track C added — T13 (opponent model) in sibling worktree ../heads-
 Ruling R29: plumbing tasks (T11, T19, T24) implementers at opus effort high; strategy tasks + full reviews stay opus max; every strategy implementer gets an explicit wall-clock time box — deadline pressure — cost if wrong: slightly less polish on plumbing.
 Target timeline: v2 submission-ready + reviewed ~01:00; CFR training overnight on user's PC; v3 gate ~08:00; final ~10:00; deadline 12:00.
 Note: foreign worktree 'licheng' (another session) exists in git worktree list — not ours; leave alone.
+HANDOFF (2026-11-07 ~16:30): user will move the session to their PC. Handoff bundle committed on branch kevin-handoff (993bf41, worktree ../heads-up-bundle-handoff) = docs/handoff/{README.md, sdd-workspace/, memory/}. Push to origin was DENIED by the permission classifier → user must push (or grant permission). Plan: pause new dispatches once in-flight T10/T13/T16 close, refresh the handoff snapshot (ledger copy), user pushes, then switch.
+HANDOFF: user pushed kevin(0269604), kevin-cfr, kevin-opp, kevin-handoff(993bf41) to origin at ~16:32. Next: finish in-flight T10/T13/T16 + reviews, then refresh handoff snapshot and ask user to re-push.
+Task 10: time box sent at 16:35 → wrap up by ~17:30 (DONE_WITH_CONCERNS allowed; hand unmet targets + ideas to T12).
+USER INFO (2026-11-07 ~16:45): organizer says bots run on a Kubernetes cluster on a GCP VM with ~96 vCPUs (unconfirmed details); each bot is a Docker container (guide: 1 CPU, 4 GB per bot).
+Ruling R30: tournament-hardware adjustments —
+  (a) T11: measure cpu_factor at warmup (fixed reference workload vs dev-laptop time), floor 1.0, feed grace_for_cpu_factor; ALSO re-estimate cpu_factor online from measured decision times during play (TimeManager pacing already self-corrects on measured time; this closes the unseen-plumbing hole);
+  (b) T12: add per-bot `time_scale` to sim/match.play_half/play_match (charged time and timeouts scaled; emulates slower vCPU for BOTH bots) and run tuning/eval at time_scale≈2.5 as the primary condition (opponents' bank exhaustion becomes realistic);
+  (c) startup budget tightened to ≤ ~2 s on the dev laptop (warmup incl. all table loads);
+  (d) tools/check_build.sh (Docker) MUST run on the user's PC before any submission;
+  (e) no change to training/blueprint design.
+  — cost if wrong: conservative time use on a fast VM (slightly fewer rollouts).
+OPEN QUESTION for organizer (user to ask): per-container CPU request/limit, machine type, concurrent matches per VM, judge+bots same pod?
+Task 13 (Track C): implementer done (371e137 on kevin-opp).
+Task 13: Ruling: check-folder rule = ≥12 consecutive bet-facing folds AND no call/bet/raise since the run began (replaces literal "0 raises in last 40 decisions") — literal rule missed the hand-70 detection on 3/8 seeds; new rule detects at 60–61; nit false-flags 8–25/1000 hands, harmless (+EV to bet, reverts on first call) — cost if wrong: occasional over-betting vs nits.
+Task 13: note for T14: detector precedence check-folder > maniac > station (station+maniac both trip on never-fold-always-raise bots); construct OpponentModel(raise_cap=config.raise_cap, big_blind=config.big_blind) in new_half; call observe() first in choose_action.

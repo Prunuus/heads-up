@@ -1,2 +1,3 @@
 - [PLO5 bot SDD execution](plo5-bot-sdd-execution.md) — how to resume the subagent-driven plan run (ledger path, branch, env limits, no push)
 - [Training hardware](training-hardware.md) — user has a high-end CPU machine for offline training; make training portable/many-core
+- [Tournament environment](tournament-environment.md) — bots run on a GCP k8s VM (~96 vCPUs shared, 1 CPU/bot); calibrate CPU speed, sim at 2.5× time scale, run check_build on PC

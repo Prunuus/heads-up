@@ -84,6 +84,21 @@ You need Claude Code with the **superpowers** plugin installed, since the skills
   - Size the bucket counts (`data/buckets.npz` metadata, R26) and the iteration target to this machine.
 - **The team name is a placeholder.** `agent.py` has `PARTICIPANT = "KChen"` (ruling R1). It must match the registered team name before submission.
 
+## 5b. Decisions made after the first snapshot (also recorded in the ledger)
+- **Tournament hardware (ruling R30).** The organizer says the bots run on a **Kubernetes cluster on a GCP VM with roughly 96 vCPUs**, shared by many concurrent matches. Each bot is still 1 CPU and 4 GB, so it gets no extra compute, and one vCPU is a hyperthread. Assume our bot runs **1.5–3× slower than the Mac**, and that the other teams' bots will empty their time banks more often. What to do:
+  - **T11:** measure a CPU-speed factor at warmup, floored at 1.0, and pass it to `bot.timing.grace_for_cpu_factor`. Re-estimate it online from measured decision times.
+  - **T12:** add a per-bot `time_scale` to `sim.match` and run tuning and evaluation at about **2.5×** as the primary condition.
+  - **Startup:** keep it at about 2 s or less on a fast machine.
+  - **Docker:** `tools/check_build.sh` must pass before any submission.
+  - **Training:** the training and blueprint design are unchanged.
+  - **Still to ask the organizer:** the per-container CPU request and limit, the machine type, how many matches run concurrently per VM, and whether the judge and both bots share a pod.
+- **Task 13 (Track C) rulings.**
+  - The check-folder detector fires on 12 or more consecutive bet-facing folds with no call, bet or raise since that run began. It catches `checkfold_after(50)` at hand 60–61.
+  - **For T14:** detector precedence is check-folder > maniac > station.
+  - **Wiring:** create `OpponentModel(raise_cap=config.raise_cap, big_blind=config.big_blind)` in `new_half`, and call `observe()` first in `choose_action`.
+- **Task 10** got a time box (wrap up by about 17:30). Unmet targets and ideas go to T12.
+- **How the PC is used.** Preferred: this Mac stays the controller (it travels home with its lid closed, and the session resumes afterwards) and drives the PC over SSH on the home network. The fallback is a full session switch using this bundle.
+
 ## 6. What comes next, and the timeline
 
 **Track A** (`kevin`):
