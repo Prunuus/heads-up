@@ -33,21 +33,50 @@ BotFactory = Callable[[], Any]
 _VERDICTS = {AGENT1_WIN: "A", AGENT2_WIN: "B", CHOP: "CHOP", BOTH_FORFEIT: "BOTH_FORFEIT"}
 _counter = itertools.count()
 
+# Packages a bot file gets a fresh copy of on every load: the tournament starts each
+# half in a new process, so module-level state in our runtime package must not cross
+# halves, matches or candidates in the simulator either (ruling R22).
+FRESH_PACKAGES: tuple = ("bot",)
 
-def load_bot_file(path: str) -> ModuleType:
-    """Import a bot file under a unique module name (fresh globals each call)."""
+
+def _evict(packages: tuple) -> dict:
+    """Remove each package and its submodules from sys.modules; return what was removed."""
+    gone = {}
+    for name in list(sys.modules):
+        if any(name == p or name.startswith(p + ".") for p in packages):
+            gone[name] = sys.modules.pop(name)
+    return gone
+
+
+def load_bot_file(path: str, fresh_packages: tuple = FRESH_PACKAGES) -> ModuleType:
+    """Import a bot file the way the tournament starts a half: as a fresh process would.
+
+    - The file runs under a unique module name, so every call gets fresh globals.
+    - Every package in fresh_packages (default: our `bot`) is evicted from sys.modules
+      before the file runs, so its imports of them run fresh too. Two bots in one match
+      each get their own copy.
+    - Afterwards sys.modules is put back as it was. The caller keeps its own copy of those
+      packages (pickling, monkeypatching and isinstance keep working), and the loaded
+      module with its private copies lives only as long as the caller holds it, so a long
+      serial run does not keep one copy of the package (and its tables) per half.
+
+    Bot code must import at load time (module top level): an import that first runs
+    during play resolves against the caller's sys.modules, not the bot's private copy.
+    """
     p = Path(path)
     if not p.is_absolute():
         p = REPO_ROOT / p
     name = f"_simbot_{next(_counter)}_{p.stem}"
     spec = importlib.util.spec_from_file_location(name, p)
     module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
+    saved = _evict(fresh_packages)
+    sys.modules[name] = module            # registered while it runs (dataclasses need it)
     try:
         spec.loader.exec_module(module)
-    except BaseException:
+    finally:
         sys.modules.pop(name, None)
-        raise
+        _evict(fresh_packages)
+        sys.modules.update(saved)
     return module
 
 

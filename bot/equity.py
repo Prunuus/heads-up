@@ -1,4 +1,17 @@
-"""Vectorized Monte Carlo equity, current-board strength, and exact nut flags."""
+"""Vectorized Monte Carlo equity, current-board strength, and exact nut flags.
+
+Zero budget: bot.timing.TimeManager.iters() returns 0 when time is short, and callers
+pass that straight in. equity_vs_random and strength_now treat any iters <= 0 as "no
+rollouts": they sample nothing, leave rng untouched and return a cheap deterministic
+estimate in [0, 1] (about a quarter of the cost of 16 rollouts), never NaN and never an
+exception:
+- equity_vs_random preflop: the offline preflop table (bot.preflop), the same
+  quantity from 3,000 rollouts per hand class; 0.5 if the table cannot be loaded.
+- otherwise (both functions): where our current made hand ranks among the made hands
+  of random holes on random boards of the same size (ties count half). It ignores this
+  board's texture, so it is rough (mean error about 0.1 against the exact strength),
+  and equity gets no credit for draws.
+"""
 
 from __future__ import annotations
 
@@ -7,10 +20,48 @@ from typing import Sequence
 
 import numpy as np
 
-from bot import fasteval
+from bot import fasteval, preflop
 
 _ALL = np.arange(36, dtype=np.intp)
 _ACE = 8
+
+_REF_ROWS = 2048           # random (hole, board) spots per board width in the reference
+_REF_SEED = 20261107
+_REF: dict[int, np.ndarray] | None = None   # board width -> sorted made-hand scores
+
+
+def warmup() -> None:
+    """Build fasteval's table and the zero-budget reference (idempotent, about 10 ms)."""
+    global _REF
+    fasteval.warmup()
+    if _REF is None:
+        rng = np.random.default_rng(_REF_SEED)
+        ref = {}
+        for w in (3, 4, 5):
+            cards = rng.random((_REF_ROWS, 36)).argsort(axis=1)[:, :5 + w]
+            ref[w] = np.sort(fasteval.made_now_batch(cards[:, :5], cards[:, 5:]))
+        _REF = ref
+
+
+def _made_hand_estimate(hole: Sequence[int], board: Sequence[int]) -> float:
+    """Zero-budget strength: our made hand's rank among the reference made hands."""
+    if _REF is None:
+        warmup()
+    ours = fasteval.made_now_batch(np.asarray(hole, dtype=np.intp)[None, :],
+                                   np.asarray(board, dtype=np.intp)[None, :])[0]
+    ref = _REF[len(board)]
+    return float(ref.searchsorted(ours, "left") + ref.searchsorted(ours, "right")) / (2 * len(ref))
+
+
+def _zero_budget_equity(hole: Sequence[int], board: Sequence[int]) -> float:
+    if len(board) == 0:
+        try:
+            return preflop.preflop_strength(hole)
+        except (OSError, KeyError, ValueError):     # missing or unreadable table, bad hole
+            return 0.5
+    if len(board) not in (3, 4, 5):
+        raise ValueError("equity_vs_random with iters <= 0 needs a board of 0, 3, 4 or 5 cards")
+    return _made_hand_estimate(hole, board)
 
 
 def _unseen(hole: Sequence[int], board: Sequence[int]) -> np.ndarray:
@@ -32,7 +83,12 @@ def _score(ours: np.ndarray, theirs: np.ndarray) -> float:
 
 def equity_vs_random(hole: Sequence[int], board: Sequence[int], iters: int,
                      rng: np.random.Generator) -> float:
-    """P(win) + 0.5 P(tie) vs a random 5-card hand, rolling out the board."""
+    """P(win) + 0.5 P(tie) vs a random 5-card hand, rolling out the board.
+
+    iters <= 0: no sampling; the deterministic zero-budget estimate (module docstring).
+    """
+    if iters <= 0:
+        return _zero_budget_equity(hole, board)
     need = 5 - len(board)
     draw = _sample(_unseen(hole, board), 5 + need, iters, rng)
     opp = draw[:, :5]
@@ -45,9 +101,14 @@ def equity_vs_random(hole: Sequence[int], board: Sequence[int], iters: int,
 
 def strength_now(hole: Sequence[int], board: Sequence[int], iters: int,
                  rng: np.random.Generator) -> float:
-    """Win + half-tie rate of our made hand vs random hands on the current board."""
+    """Win + half-tie rate of our made hand vs random hands on the current board.
+
+    iters <= 0: no sampling; the deterministic zero-budget estimate (module docstring).
+    """
     if len(board) not in (3, 4, 5):
         raise ValueError("strength_now needs a board of 3, 4 or 5 cards")
+    if iters <= 0:
+        return _made_hand_estimate(hole, board)
     opp = _sample(_unseen(hole, board), 5, iters, rng)
     boards = np.broadcast_to(np.asarray(board, dtype=np.intp), (iters, len(board)))
     holes = np.broadcast_to(np.asarray(hole, dtype=np.intp), (iters, 5))

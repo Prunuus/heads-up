@@ -143,12 +143,25 @@ def _per_deal_bb(m: MatchStats) -> np.ndarray:
     return (np.asarray(h1.nets_a, dtype=float) + np.asarray(h2.nets_a, dtype=float)) / BIG_BLIND
 
 
+def mean_ci(d) -> tuple:
+    """(ci_low, mean, ci_high) for the mean of d: mean +- Z * sd / sqrt(N).
+
+    sd is the sample standard deviation (ddof=1), 0 for a single value; N = len(d).
+    """
+    d = np.asarray(d, dtype=float)
+    n = len(d)
+    mean = float(d.mean())
+    sd = float(d.std(ddof=1)) if n > 1 else 0.0
+    half = Z * sd / math.sqrt(n)
+    return mean - half, mean, mean + half
+
+
 def paired_diff(cand_a: BotFactory, cand_b: BotFactory, opponents: dict, seeds: list,
                 deals: int, workers: int = 1) -> tuple:
     """Return (ci_low, mean, ci_high) of the per-deal bb difference A - B.
 
     Same opponents and seeds for both; all deals are pooled and the CI is
-    mean +- 1.96*sd/sqrt(N) with N the total pooled deals.
+    mean_ci of the pooled per-deal differences, so N is the total pooled deals.
     """
     jobs = []
     for o, f in opponents.items():
@@ -159,12 +172,7 @@ def paired_diff(cand_a: BotFactory, cand_b: BotFactory, opponents: dict, seeds: 
     for who, o, s, m in _run_jobs(jobs, workers):
         res[(who, o, str(s))] = _per_deal_bb(m)
     diffs = [res[("A", o, str(s))] - res[("B", o, str(s))] for o in opponents for s in seeds]
-    d = np.concatenate(diffs)
-    n = len(d)
-    mean = float(d.mean())
-    sd = float(d.std(ddof=1)) if n > 1 else 0.0
-    half = Z * sd / math.sqrt(n)
-    return mean - half, mean, mean + half
+    return mean_ci(np.concatenate(diffs))
 
 
 # ----------------------------------------------------------------------- CLI
