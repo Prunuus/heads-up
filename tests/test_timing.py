@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from bot.timing import TimeManager
+from bot.timing import TimeManager, grace_for_cpu_factor
 from game import Street
 
 LADDER = {0, 16, 32, 64, 128, 256}
@@ -42,16 +42,16 @@ def _pot(rng: random.Random) -> int:
 def simulate_half(tm, cost_per_iter, rest_slowdown=None, hands=1000, per_hand=4, seed=0):
     """Play one half on tm.clock (a FakeClock). Returns (judge-charged s, [(hand, pot, iters)]).
 
-    A decision costs BASE + iters * cost_per_iter. BASE and HAND_END are slowed down by
-    rest_slowdown, which defaults to the rollout slowdown cost_per_iter / NOMINAL (a slower
-    CPU slows everything). Each request is charged as the judge does,
-    max(0, work + HTTP - GRACE), where work is the previous hand's on_hand_end (delivered
-    with a hand's first request) plus one decision. The judge charge is computed here,
-    independently of tm.used.
+    A decision costs BASE + iters * cost_per_iter. BASE, HAND_END and the HTTP plumbing
+    are slowed down by rest_slowdown, which defaults to the rollout slowdown
+    cost_per_iter / NOMINAL (a slower CPU slows everything, request plumbing included).
+    Each request is charged as the judge does, max(0, work + http - GRACE), where work is
+    the previous hand's on_hand_end (delivered with a hand's first request) plus one
+    decision. The judge charge is computed here, independently of tm.used.
     """
     clock = tm.clock
     slow = cost_per_iter / NOMINAL if rest_slowdown is None else rest_slowdown
-    base, hand_end = BASE * slow, HAND_END * slow
+    base, hand_end, http = BASE * slow, HAND_END * slow, HTTP * slow
     rng = random.Random(seed)
     charged, decisions = 0.0, []
     for h in range(hands):
@@ -66,11 +66,11 @@ def simulate_half(tm, cost_per_iter, rest_slowdown=None, hands=1000, per_hand=4,
             work = base + n * cost_per_iter
             clock.advance(work)
             tm.end()
-            charged += max(0.0, pending + work + HTTP - GRACE)
+            charged += max(0.0, pending + work + http - GRACE)
             pending = 0.0
             decisions.append((h, pot, n))
     tm.add(hand_end)                                   # the final /hand-end request
-    charged += max(0.0, hand_end + HTTP - GRACE)
+    charged += max(0.0, hand_end + http - GRACE)
     return charged, decisions
 
 
@@ -79,16 +79,37 @@ def _late_big_pot_iters(decisions, hands=1000):
 
 
 def test_slow_clock_stays_under_bank():
-    # Review Focus 3: the tournament CPU is 3x slower than the dev laptop.
-    tm = TimeManager(clock=FakeClock())
-    total, decisions = simulate_half(tm, cost_per_iter=3 * NOMINAL)
+    # Review Focus 3: the tournament CPU is 3x slower than the dev laptop, plumbing included.
+    total, decisions = simulate_half(TimeManager(clock=FakeClock()), cost_per_iter=3 * NOMINAL)
     assert total < 8.0
-    assert tm.used >= total                            # never under-counts the judge
     assert min(_late_big_pot_iters(decisions)) > 0
-    # At dev-laptop speed, big pots late in the half still get rollouts.
-    _, decisions = simulate_half(TimeManager(clock=FakeClock()), cost_per_iter=NOMINAL)
+    # At dev-laptop speed the default grace never under-counts the judge, and big pots
+    # late in the half still get rollouts.
+    tm = TimeManager(clock=FakeClock())
+    total, decisions = simulate_half(tm, cost_per_iter=NOMINAL)
+    assert tm.used >= total
     late = _late_big_pot_iters(decisions)
     assert len(late) >= 20 and min(late) > 0
+
+
+@pytest.mark.parametrize("slow", [2, 3, 5])
+def test_cpu_factor_grace_stops_under_counting(slow):
+    # Plumbing is CPU-bound too: on a slower CPU the default grace under-counts the judge,
+    # while a grace sized for the measured CPU factor does not.
+    default = TimeManager(clock=FakeClock())
+    total, _ = simulate_half(default, cost_per_iter=slow * NOMINAL)
+    assert default.used < total
+    tm = TimeManager(clock=FakeClock(), grace_s=grace_for_cpu_factor(slow))
+    total, _ = simulate_half(tm, cost_per_iter=slow * NOMINAL)
+    assert tm.used >= total
+    assert total < 8.0
+
+
+def test_grace_for_cpu_factor():
+    assert grace_for_cpu_factor(1.0) == pytest.approx(0.00075)      # the default grace
+    assert grace_for_cpu_factor(3.0) == pytest.approx(0.00025)
+    for junk in (float("nan"), None, "x", 0.0, -2.0):               # unmeasured: default
+        assert grace_for_cpu_factor(junk) == pytest.approx(0.00075)
 
 
 def test_pacing_holds_bank_when_rollouts_are_far_slower():
@@ -156,6 +177,37 @@ def test_hard_stop_scales_with_retuned_bank():
     tm.used = 2.99
     assert tm.iters(160, Street.RIVER, 999) > 0
     tm.used = 3.01
+    assert tm.iters(160, Street.RIVER, 999) == 0
+
+
+def test_target_scales_with_retuned_bank():
+    assert TimeManager().target_s == 3.0
+    tm = TimeManager(bank_s=2.0, clock=FakeClock())
+    assert tm.target_s == pytest.approx(0.75) and tm.stop_s == pytest.approx(1.5)
+    assert tm.target_s < tm.stop_s
+    tm.used = 0.5                                      # projected 0.5 s: on a 0.75 s pace
+    assert [tm.iters(p, Street.FLOP, 999) for p in (5, 20, 100)] == [32, 64, 128]
+    tm.used = 0.85                                     # 13% over 0.75 s: one level down
+    assert [tm.iters(p, Street.FLOP, 999) for p in (5, 20, 100)] == [16, 32, 64]
+
+
+def test_degenerate_config_never_raises():
+    # A raise inside new_half forfeits the half, so bad settings fall back instead.
+    for bank in (0, -1.0, float("nan"), None, "x"):
+        tm = TimeManager(bank_s=bank, clock=FakeClock())
+        assert tm.iters(160, Street.RIVER, 0) == 0    # no usable bank: no Monte Carlo
+    for hands in (0, -5, float("nan"), None):
+        assert TimeManager(hands=hands).hands == 1000
+    for target in (0, -1.0, float("nan"), "x"):
+        assert TimeManager(target_s=target).target_s == 3.0
+    clock = FakeClock()
+    tm = TimeManager(grace_s=float("nan"), clock=clock)
+    tm.begin()
+    clock.advance(0.003)
+    tm.end()
+    assert tm.used == pytest.approx(0.003 - 0.00075)  # default grace
+    tm = TimeManager(bank_s=float("inf"), target_s=1.0)
+    tm.used = float("inf")                             # endless overshoot must not overflow
     assert tm.iters(160, Street.RIVER, 999) == 0
 
 
