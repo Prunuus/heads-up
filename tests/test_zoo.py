@@ -3,13 +3,21 @@ import pickle
 import pytest
 
 from sim.match import play_half
-from sim.opponents.archetypes import ZOO, checkfold_after
+from sim.opponents import FORFEIT_PRONE, HOLDOUT, ZOO
+from sim.opponents.archetypes import checkfold_after
 
 
 @pytest.mark.parametrize("name", list(ZOO))
 def test_zoo_bot_is_legal_and_errorless(name):
     h = play_half(ZOO[name], ZOO["calling_station"], "z1", 1, deals=100)
-    assert h.errors_a == 0 and not h.forfeit_a
+    if name in FORFEIT_PRONE:
+        assert h.errors_a > 0
+    else:
+        assert h.errors_a == 0 and not h.forfeit_a
+
+
+def test_holdout_names_exist():
+    assert HOLDOUT <= set(ZOO)
 
 
 def test_zoo_factories_are_picklable():
