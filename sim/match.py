@@ -12,7 +12,7 @@ import importlib.util
 import itertools
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
@@ -21,7 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from game import (ACTION_TIMEOUT_SECONDS, ERROR_LIMIT,  # noqa: E402
+from game import (ACTION_TIMEOUT_SECONDS, Action, Street, ERROR_LIMIT,  # noqa: E402
                   TIME_BANK_SECONDS, AgentConfig, Game, button_for_deal,
                   default_action, make_deal)
 from judge_engine import (AGENT1_WIN, AGENT2_WIN, BOTH_FORFEIT, CHOP,  # noqa: E402
@@ -68,6 +68,14 @@ class HalfStats:
     calls_a: int
     calls_b: int
     max_call_a: float      # longest single request of A, seconds
+    # Action actually played (incl. defaults on error/bank-out), keyed by Action name.
+    actions_a: dict = field(default_factory=dict)
+    actions_b: dict = field(default_factory=dict)
+    # Decision context counters: faced (to_call>0), faced_fold, pre (preflop decisions), pre_fold.
+    ctx_a: dict = field(default_factory=dict)
+    ctx_b: dict = field(default_factory=dict)
+    bank_exhausted_a: bool = False
+    bank_exhausted_b: bool = False
 
 
 @dataclass
@@ -95,6 +103,8 @@ class _Handle:
         self.max_call = 0.0
         self.bot = None
         self.memory: dict = {}
+        self.actions: dict = {}
+        self.ctx: dict = {}
 
     def _record_error(self) -> None:
         self.stats.errors += 1
@@ -150,6 +160,8 @@ class _Handle:
         self.stats = AgentStats()
         self.pending = []
         self.memory = {}
+        self.actions = {}
+        self.ctx = {}
         try:
             self.bot = self.factory()
         except Exception:
@@ -173,6 +185,20 @@ class _Handle:
                 errs.append(1)
 
     def act(self, obs) -> Any:
+        action = self._act(obs)
+        name = Action(action).name
+        self.actions[name] = self.actions.get(name, 0) + 1
+        fold = name == "FOLD"
+        c = self.ctx
+        if obs.to_call > 0:
+            c["faced"] = c.get("faced", 0) + 1
+            c["faced_fold"] = c.get("faced_fold", 0) + fold
+        if obs.street == Street.PREFLOP:
+            c["pre"] = c.get("pre", 0) + 1
+            c["pre_fold"] = c.get("pre_fold", 0) + fold
+        return action
+
+    def _act(self, obs) -> Any:
         fallback = default_action(obs.to_call)
         if not self._usable():
             return fallback
@@ -229,7 +255,9 @@ def play_half(fa: BotFactory, fb: BotFactory, seed: Any, half: int,
     return HalfStats(nets_a, ha.stats.errors, hb.stats.errors,
                      ha.stats.forfeited, hb.stats.forfeited,
                      ha.stats.time_seconds, hb.stats.time_seconds,
-                     ha.stats.calls, hb.stats.calls, ha.max_call)
+                     ha.stats.calls, hb.stats.calls, ha.max_call,
+                     dict(ha.actions), dict(hb.actions), dict(ha.ctx), dict(hb.ctx),
+                     ha.stats.timed_out, hb.stats.timed_out)
 
 
 def _as_half_result(h: HalfStats, half: int, seed: str) -> HalfResult:

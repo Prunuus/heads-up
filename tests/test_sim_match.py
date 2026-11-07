@@ -190,3 +190,10 @@ def test_flush_is_one_request():
     # all hands delivered in few requests; calls_a counts requests (new_half + acts + flush)
     h = play_half(Rec, call_factory, "s1", 1, deals=1)
     assert h.errors_a >= 1
+
+
+def test_action_counts_calling_station():
+    h = play_half(call_factory, call_factory, "s1", 1, deals=20)
+    assert set(h.actions_a) == {"CHECK_CALL"} and set(h.actions_b) == {"CHECK_CALL"}
+    assert h.actions_a["CHECK_CALL"] > 0 and not h.bank_exhausted_a
+    assert h.ctx_a.get("faced_fold", 0) == 0 and h.ctx_a["pre"] > 0
