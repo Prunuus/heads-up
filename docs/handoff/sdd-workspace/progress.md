@@ -161,3 +161,12 @@ OPEN QUESTION for organizer (user to ask): per-container CPU request/limit, mach
 Task 13 (Track C): implementer done (371e137 on kevin-opp).
 Task 13: Ruling: check-folder rule = ≥12 consecutive bet-facing folds AND no call/bet/raise since the run began (replaces literal "0 raises in last 40 decisions") — literal rule missed the hand-70 detection on 3/8 seeds; new rule detects at 60–61; nit false-flags 8–25/1000 hands, harmless (+EV to bet, reverts on first call) — cost if wrong: occasional over-betting vs nits.
 Task 13: note for T14: detector precedence check-folder > maniac > station (station+maniac both trip on never-fold-always-raise bots); construct OpponentModel(raise_cap=config.raise_cap, big_blind=config.big_blind) in new_half; call observe() first in choose_action.
+Task 16 (Track B): implementer done (9ae259d, d93b93a on kevin-cfr).
+Task 16: Ruling: bucket() uses deterministic exact features (identical offline/runtime; ignores iters/rng, signature kept) instead of MC strength/equity — MC at 128 iters agreed with offline only 71% (flop)/64% (turn) same-or-adjacent vs ≥80% required; exact features agree 100% at any iters, 6–10× more accurate, p99 ≤0.30 ms — cost if wrong: features might capture potential less well (review must verify they separate made hands from draws).
+Task 16: note for T17/T19: store hash of data/buckets.npz in dataset + blueprint; loader verifies (refit invalidates both). note for T20: cache bucket per (hand, street) — fixed ~0.1–0.3 ms per call.
+Task 16: river nut buckets uneven (0.58–1.97× expected) — 82% of nut hands tie at equity 1.0; split by category.
+PAUSE (16:47): user going offline (driving home; Mac sleeps). Directive: no new tasks; finish up. Sent wrap-up messages: T10 implementer (commit best version now), T13 reviewer + T16 reviewer (verdict within ~10 min).
+RESUME CHECKLIST (next session / after wake):
+  1. For T10/T13/T16: if the wrap-up result arrived, process it per SDD (review / fix loop / complete). If an agent died mid-flight, resume it via SendMessage (same agent id, context intact) or re-dispatch with its brief + report path.
+  2. Then continue: Track A T11 (with R30a, T9/T15/audit carry-forward notes) → T12 (R30b time_scale) → merge kevin-opp → T14; Track B T17 → T18 (PC over SSH, R23) → T19.
+  3. PC via SSH: user to provide OS + LAN IP, run ssh-keygen/ssh-copy-id, and allow Bash(ssh/scp/rsync).
