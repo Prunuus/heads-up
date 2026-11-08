@@ -102,7 +102,7 @@ _CONFIG_KEYS = (("stack", "starting_stack"), ("sb", "small_blind"), ("bb", "big_
 # <= AUTO_ENTER over >= AUTO_MIN_N raise-legal preflop decisions, return to the blueprint at
 # a rate >= AUTO_EXIT (the band between keeps the current base).
 BASES = ("auto", "blueprint", "heuristic")
-DEFAULT_BASE = "blueprint"
+DEFAULT_BASE = "auto"
 AUTO_MIN_N = 60
 AUTO_ENTER = 0.12
 AUTO_EXIT = 0.20
@@ -449,8 +449,9 @@ class PolicyBot:
     params             heuristic thresholds (default HeuristicParams())
     use_blueprint      consult the blueprint when one is loaded and the game matches it;
                        False is v2 (the heuristic base, decision for decision)
-    base               "blueprint" (default), "heuristic", or "auto": the blueprint until the
-                       opponent looks passive (select_base), then the heuristic (Task 20b)
+    base               "auto" (default), "blueprint" or "heuristic". Auto plays the blueprint
+                       until the opponent looks passive (select_base), then the heuristic
+                       (Task 20b)
     use_exploits       run the exploit layer on the base action
     purify             Blueprint.act's purification threshold (default PURIFY)
     blueprint_streets  the streets on which the blueprint is consulted (default all)
