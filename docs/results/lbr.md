@@ -81,4 +81,12 @@ idle machine (8 workers on CPUs 8–15):
   same for every target.
 - For BotLike targets, per-half state must live in `memory`, and randomness must come from an
   rng stored at the top level of `memory` (module docstring). A target that breaks this is
-  still sampled, but LBR's model of it is then approximate. Watch the inconsistent count.
+  still sampled, but LBR's model of it is then approximate.
+- `lbr_eval` fails closed: it raises `ModelCheckError`, and the CLI exits with code 2. That
+  happens when re-simulated decisions or the shadow's `on_hand_end` err while the real target
+  never does, or when more than 2% of target actions (+2) are predicted by no particle.
+  `--max-inconsistent` raises the limit; `--no-model-check` opts out.
+  - The heuristic passes: a 50-deal run had 0 re-simulation errors and 3/230 inconsistent
+    actions, and the headline run had 35/17,242 (0.2%).
+  - Only the `DistributionTarget` adapter is weighted by its probabilities. Its
+    `choose_action` samples them by construction; any other bot is re-simulated.

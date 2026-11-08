@@ -1,18 +1,21 @@
 """Local Best Response probe (sim/opponents/lbr.py)."""
 
+import dataclasses
 import functools
 import pickle
 
 import numpy as np
 import pytest
 
+import sim.opponents.lbr as lbr
 from evaluator import omaha_score
 from game import Action, AgentConfig, Game, HandResult, make_deal
 from sim.heuristic_bot import HeuristicBot
 from sim.match import play_half
 from sim.opponents import ZOO
-from sim.opponents.lbr import (DistributionTarget, LBRBot, action_values, lbr_eval,
-                               make_lbr, particle_wins, target_result, win_prob)
+from sim.opponents.lbr import (DistributionTarget, LBRBot, ModelCheckError, action_values,
+                               lbr_eval, make_lbr, model_problems, particle_wins,
+                               target_result, win_prob)
 
 FOLD, CALL, HALF, POT = Action.FOLD, Action.CHECK_CALL, Action.RAISE_HALF, Action.RAISE_POT
 
@@ -347,6 +350,113 @@ def test_distribution_target_plays_legally_by_sampling():
     h = play_half(functools.partial(DistributionTarget, ace_probs), ZOO["random"], "dt", 1,
                   deals=50)
     assert h.errors_a == 0 and h.actions_a.get("RAISE_POT", 0) > 0
+
+
+# --------------------------------------------------------------------------- fail closed
+
+_FC_DEALS = 12
+_DEALT = {h for seed in ("fc", "fc1") for d in range(_FC_DEALS)       # "fc1": the CLI's seed
+          for h in make_deal(seed, d).hole_cards}
+
+
+class CrashesOffDeal:
+    """Checks/calls with the holes the deal gives it and raises for any other hole. Only LBR's
+    re-simulation asks about other holes, so the real target never errs."""
+
+    def new_half(self, config, memory):
+        pass
+
+    def choose_action(self, obs, memory):
+        if tuple(obs.hole_cards) not in _DEALT:
+            raise RuntimeError("not my cards")
+        return CALL
+
+    def on_hand_end(self, result, memory):
+        pass
+
+
+class RaisesOnDeal(CrashesOffDeal):
+    """Pot-raises with the holes the deal gives it, checks/calls with any other: it never
+    errs, but LBR's re-simulation never predicts the real target's raises."""
+
+    def choose_action(self, obs, memory):
+        if tuple(obs.hole_cards) in _DEALT and POT in obs.legal_actions:
+            return POT
+        return CALL
+
+
+def test_lbr_eval_fails_closed_when_the_re_simulated_target_raises():
+    with pytest.raises(ModelCheckError, match="re-simulated") as caught:
+        lbr_eval(CrashesOffDeal, seeds=["fc"], deals=_FC_DEALS, particles=30)
+    r = caught.value.result
+    assert r.target_errors == 0 and r.stats["model_errors"] > 0
+    again = pickle.loads(pickle.dumps(caught.value))       # survives a worker boundary
+    assert again.problems == caught.value.problems and again.result.deals == r.deals
+    r2 = lbr_eval(CrashesOffDeal, seeds=["fc"], deals=_FC_DEALS, particles=30,
+                  check_model=False)                       # the explicit opt-out
+    assert r2.model_problems and r2.stats["model_errors"] == r.stats["model_errors"]
+
+
+def test_lbr_eval_fails_closed_when_re_simulation_disagrees_with_the_target():
+    with pytest.raises(ModelCheckError, match="no particle") as caught:
+        lbr_eval(RaisesOnDeal, seeds=["fc"], deals=_FC_DEALS, particles=30)
+    st = caught.value.result.stats
+    assert st["model_errors"] == 0 and st["inconsistent"] > 0.02 * st["target_actions"] + 2
+
+
+def test_cli_exits_non_zero_when_the_model_check_fails(monkeypatch, capsys):
+    monkeypatch.setattr(lbr, "resolve_target", lambda spec: CrashesOffDeal)
+    args = ["--target", "x", "--seed-prefix", "fc", "--seeds", "1", "--deals", str(_FC_DEALS),
+            "--particles", "30"]
+    assert lbr.main(args) == 2
+    assert "MODEL PROBLEM" in capsys.readouterr().out
+    assert lbr.main(args + ["--no-model-check"]) == 0
+
+
+def test_model_problems_rules():
+    ok = {"model_errors": 0, "shadow_errors": 0, "inconsistent": 1, "target_actions": 1000}
+    assert model_problems(ok, target_errors=0, max_inconsistent=0.02) == []
+    assert len(model_problems(dict(ok, model_errors=1), 0, 0.02)) == 1
+    assert model_problems(dict(ok, model_errors=1), 3, 0.02) == []      # the target errs too
+    assert len(model_problems(dict(ok, shadow_errors=2), 0, 0.02)) == 1
+    assert len(model_problems(dict(ok, inconsistent=40), 0, 0.02)) == 1  # 4% > 2%
+    assert model_problems(dict(ok, inconsistent=40), 0, None) == []     # no rate limit
+    assert model_problems(dict(ok, inconsistent=2, target_actions=10), 0, 0.02) == []  # noise
+
+
+class _HandEndCrash(FoldToBets):
+    def on_hand_end(self, result, memory):
+        raise RuntimeError("boom")
+
+
+def test_shadow_hand_end_errors_are_counted():
+    bot, memory = LBRBot(_HandEndCrash, particles=10), {}
+    bot.new_half(AgentConfig(), memory)
+    bot.on_hand_end(HandResult(0, 1, 3, False, (), None, "me"), memory)
+    assert memory["lbr"].model.hand_end_errors == 1
+
+
+class _ClaimsProbs(FoldToBets):
+    """Has an action_probs method but is not the adapter, so nothing guarantees that its
+    choose_action samples from it: LBR must re-simulate it."""
+
+    def action_probs(self, obs, memory):
+        return [1.0 / len(obs.legal_actions)] * len(obs.legal_actions)
+
+
+def test_only_the_adapter_is_weighted_by_its_probabilities():
+    for factory, model in ((_ClaimsProbs, lbr._Resim),
+                           (functools.partial(DistributionTarget, ace_probs), lbr._Dist)):
+        bot, memory = LBRBot(factory, particles=10), {}
+        bot.new_half(AgentConfig(), memory)
+        assert type(memory["lbr"].model) is model
+
+
+def test_with_hole_is_dataclasses_replace():
+    obs = Game(make_deal("wh", 0), 0).observation(0)
+    hole = (0, 1, 2, 3, 4)
+    assert lbr._with_hole(obs, hole) == dataclasses.replace(obs, hole_cards=hole)
+    assert obs.hole_cards != hole
 
 
 @pytest.mark.slow

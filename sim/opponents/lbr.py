@@ -45,14 +45,23 @@ shadow for hypothetical holes; there are two kinds of target.
   memory (instance or module state must not change decisions), and randomness comes from an rng
   stored at the top level of memory (any other randomness is still sampled per particle, but
   not reproducibly).
-- Distribution target: a bot with action_probs(obs, memory) -> probabilities aligned with
-  obs.legal_actions, equal to the distribution that its choose_action samples from. LBR then
-  weights the particles by those probabilities exactly. action_probs must not modify memory;
-  LBR calls it with the shadow memory, which only on_hand_end advances.
-  DistributionTarget(probs_fn) is the adapter: probs_fn(obs, hole) -> probabilities over
-  obs.legal_actions (hole == obs.hole_cards). For the blueprint, that is probs(node_of(obs),
-  bucket of hole and board), masked to the legal actions. The adapter plays by sampling
-  probs_fn with a numpy Generator kept in memory.
+- Distribution target: the adapter DistributionTarget(probs_fn), with probs_fn(obs, hole) ->
+  probabilities over obs.legal_actions (hole == obs.hole_cards), a pure function. For the
+  blueprint, that is probs(node_of(obs), bucket of hole and board), masked to the legal
+  actions. The adapter plays by sampling probs_fn with a numpy Generator kept in memory, and
+  LBR weights the particles by probs_fn exactly. Only the adapter gets this path. There,
+  choose_action samples from action_probs by construction; any other bot (one with its own
+  action_probs method included) is re-simulated.
+
+Fail closed: lbr_eval checks LBR's model of the target (model_problems) and raises
+ModelCheckError, carrying the result, when either of these holds:
+- a re-simulated decision raised or answered no legal action, or the shadow's on_hand_end
+  raised, while the real target never erred;
+- more target actions than max_inconsistent (default 2%) plus 2 were predicted by no
+  particle (the heuristic: 0.2% at the default 1,000 particles).
+Pass check_model=False (CLI --no-model-check) to opt out, e.g. for a target that errs on
+rare holes, or for a stochastic target with very few particles. Raise max_inconsistent
+instead to keep the error check.
 
 CLI (repo root; heavy runs: taskset -c 8-15 nice -n 19, --workers <= 8):
   .venv/bin/python -m sim.opponents.lbr --target heuristic --seeds 16 --deals 250 --workers 8
@@ -90,6 +99,8 @@ LBR_BANK_S = 1e6          # time bank and per-request timeout of both bots in an
 TREMBLE = 1e-6            # floor on the target's probability of an action it was seen to take
 PRUNE = 1e-4              # particles lighter than this share of the heaviest are dropped
 SEED = 20261107
+MAX_INCONSISTENT = 0.02   # model check: at most this share of target actions unpredicted
+INCONSISTENT_SLACK = 2    # ... plus this many (a couple of misses are noise in a short run)
 
 FOLD, CALL, HALF, POT = Action.FOLD, Action.CHECK_CALL, Action.RAISE_HALF, Action.RAISE_POT
 _RAISES = (HALF, POT)
@@ -194,15 +205,18 @@ def _with_hole(obs: Observation, hole: tuple) -> Observation:
     return o
 
 
-def _judged(bot, obs: Observation, memory: dict) -> Action:
-    """The action the judge plays for bot here: its answer, or default_action when it raises
-    or answers anything that is not a legal action."""
+def _judged(bot, obs: Observation, memory: dict) -> tuple:
+    """(action, ok): the action the judge plays for bot here, and whether bot answered it.
+    When bot raises or answers anything that is not a legal action, the judge plays
+    default_action and ok is False."""
     try:
         raw = bot.choose_action(obs, memory)
     except Exception:
-        return default_action(obs.to_call)
+        return default_action(obs.to_call), False
     a = coerce_action(raw) if raw is None or isinstance(raw, (int, str, float)) else None
-    return a if a is not None and a in obs.legal_actions else default_action(obs.to_call)
+    if a is None or a not in obs.legal_actions:
+        return default_action(obs.to_call), False
+    return a, True
 
 
 def _reseed(memory: dict, seed: int) -> dict:
@@ -224,6 +238,8 @@ class _Resim:
         self.bot = bot
         self.shadow = shadow
         self.calls = 0
+        self.errors = 0            # re-simulated decisions that raised or answered no action
+        self.hand_end_errors = 0   # the shadow's on_hand_end raised
 
     def particle_memories(self, seeds: np.ndarray) -> list:
         return [_reseed(copy.deepcopy(self.shadow), int(s)) for s in seeds]
@@ -237,7 +253,9 @@ class _Resim:
         holes = hand.hole_tuples
         for i in idx:
             m = copy.deepcopy(mems[i]) if branch else mems[i]
-            P[i, _judged(self.bot, _with_hole(obs, holes[i]), m)] = 1.0
+            a, ok = _judged(self.bot, _with_hole(obs, holes[i]), m)
+            P[i, a] = 1.0
+            self.errors += not ok
             mems[i] = m
         self.calls += len(idx)
         return P, mems
@@ -248,16 +266,18 @@ class _Resim:
         try:
             self.bot.on_hand_end(result, self.shadow)
         except Exception:
-            pass
+            self.hand_end_errors += 1
 
 
 class _Dist:
-    """Distribution target: exact probabilities from action_probs(obs, shadow memory)."""
+    """DistributionTarget: exact probabilities from its action_probs (a failure raises)."""
 
     def __init__(self, bot, shadow: dict) -> None:
         self.bot = bot
         self.shadow = shadow
         self.calls = 0
+        self.errors = 0            # stays 0: an action_probs failure raises in LBR
+        self.hand_end_errors = 0
 
     def particle_memories(self, seeds: np.ndarray) -> None:
         return None
@@ -276,7 +296,7 @@ class _Dist:
         try:
             self.bot.on_hand_end(result, self.shadow)
         except Exception:
-            pass
+            self.hand_end_errors += 1
 
 
 class DistributionTarget:
@@ -369,8 +389,8 @@ class LBRBot:
         bot = self.target()
         shadow: dict = {}
         bot.new_half(config, shadow)
-        dist = callable(getattr(bot, "action_probs", None))
-        self.half = memory["lbr"] = _Half((_Dist if dist else _Resim)(bot, shadow))
+        model = _Dist if isinstance(bot, DistributionTarget) else _Resim
+        self.half = memory["lbr"] = _Half(model(bot, shadow))
 
     def choose_action(self, obs: Observation, memory: dict) -> Action:
         h = memory["lbr"]
@@ -485,10 +505,48 @@ class LBRResult:
     stats: dict = field(default_factory=dict)   # belief diagnostics, summed over halves
     # bb per deal, seeds in order: for paired comparisons of two targets on the same deals
     per_deal: np.ndarray = field(default_factory=lambda: np.zeros(0), repr=False)
+    model_problems: list = field(default_factory=list)   # see model_problems(); [] = healthy
 
     @property
     def ms_per_decision(self) -> float:
         return 1e3 * self.lbr_seconds / max(self.decisions, 1)
+
+
+class ModelCheckError(RuntimeError):
+    """LBR's model of the target failed model_problems, so its value would be unreliable.
+    .problems holds the reasons and .result the LBRResult."""
+
+    def __init__(self, problems: list, result: LBRResult) -> None:
+        super().__init__("LBR's model of the target is unreliable: " + "; ".join(problems))
+        self.problems = problems
+        self.result = result
+
+    def __reduce__(self):                 # picklable despite the two-argument constructor
+        return ModelCheckError, (self.problems, self.result)
+
+
+def model_problems(stats: dict, target_errors: int, max_inconsistent: float | None) -> list:
+    """Reasons to distrust LBR's model of the target, from lbr_eval's stats ([] = healthy).
+
+    - While the real target never erred: re-simulated decisions that raised or answered no
+      legal action (model_errors), or shadow on_hand_end errors (shadow_errors). The judge plays
+      default_action for those, so the model has diverged from the target that plays.
+    - Target actions that no particle predicted (inconsistent): more than max_inconsistent of
+      target_actions plus INCONSISTENT_SLACK. None disables this limit.
+    """
+    out = []
+    if not target_errors:
+        if stats.get("model_errors", 0):
+            out.append(f"{stats['model_errors']} re-simulated decisions raised or answered no "
+                       "legal action, but the real target never erred")
+        if stats.get("shadow_errors", 0):
+            out.append(f"the shadow target's on_hand_end raised {stats['shadow_errors']} "
+                       "time(s), but the real target never erred")
+    acts, inc = stats.get("target_actions", 0), stats.get("inconsistent", 0)
+    if max_inconsistent is not None and inc > max_inconsistent * acts + INCONSISTENT_SLACK:
+        out.append(f"{inc} of {acts} target actions ({inc / acts:.1%}) were predicted by no "
+                   f"particle (limit {max_inconsistent:.0%} + {INCONSISTENT_SLACK})")
+    return out
 
 
 def lbr_half(target: BotFactory, seed, half: int, deals: int, rollouts: int = ROLLOUTS,
@@ -508,7 +566,9 @@ def lbr_half(target: BotFactory, seed, half: int, deals: int, rollouts: int = RO
         raise RuntimeError(f"LBR erred {hs.errors_a} time(s) in seed {seed} half {half}")
     stats = {}
     if made and made[0].half is not None:
-        stats = dict(made[0].half.stats, target_calls=made[0].half.model.calls)
+        m = made[0].half.model
+        stats = dict(made[0].half.stats, target_calls=m.calls, model_errors=m.errors,
+                     shadow_errors=m.hand_end_errors)
     return hs, stats
 
 
@@ -518,9 +578,14 @@ def _job(job: tuple) -> tuple:
 
 
 def lbr_eval(target: BotFactory, seeds: list, deals: int, workers: int = 1,
-             rollouts: int = ROLLOUTS, particles: int = PARTICLES,
-             lbr_seed: int = SEED) -> LBRResult:
-    """LBR vs target over every seed (both halves each), pooled per deal like paired_diff."""
+             rollouts: int = ROLLOUTS, particles: int = PARTICLES, lbr_seed: int = SEED,
+             max_inconsistent: float | None = MAX_INCONSISTENT,
+             check_model: bool = True) -> LBRResult:
+    """LBR vs target over every seed (both halves each), pooled per deal like paired_diff.
+
+    Fails closed: raises RuntimeError if LBR itself erred, and ModelCheckError if
+    model_problems finds any (check_model=False returns the result with them listed).
+    """
     seeds = [str(s) for s in seeds]
     jobs = [(target, s, half, deals, rollouts, particles, lbr_seed)
             for s in seeds for half in (1, 2)]
@@ -542,9 +607,13 @@ def lbr_eval(target: BotFactory, seeds: list, deals: int, workers: int = 1,
         for k, v in st.items():
             stats[k] = stats.get(k, 0) + v
     hss = [hs for hs, _ in halves.values()]
-    return LBRResult(mean, lo, hi, len(per_deal), stats.get("decisions", 0),
-                     sum(hs.bank_a for hs in hss), wall, sum(hs.errors_b for hs in hss), stats,
-                     per_deal)
+    result = LBRResult(mean, lo, hi, len(per_deal), stats.get("decisions", 0),
+                       sum(hs.bank_a for hs in hss), wall, sum(hs.errors_b for hs in hss),
+                       stats, per_deal)
+    result.model_problems = model_problems(stats, result.target_errors, max_inconsistent)
+    if check_model and result.model_problems:
+        raise ModelCheckError(result.model_problems, result)
+    return result
 
 
 # ----------------------------------------------------------------------------------- CLI
@@ -568,11 +637,20 @@ def main(argv=None) -> int:
     ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--particles", type=int, default=PARTICLES)
     ap.add_argument("--rollouts", type=int, default=ROLLOUTS)
+    ap.add_argument("--max-inconsistent", type=float, default=MAX_INCONSISTENT,
+                    help="model check: allowed share of target actions no particle predicted")
+    ap.add_argument("--no-model-check", action="store_true",
+                    help="report the value even if LBR's model of the target looks broken")
     ap.add_argument("--out", help="write the result as JSON")
     args = ap.parse_args(argv)
     seeds = [f"{args.seed_prefix}{i}" for i in range(1, args.seeds + 1)]
-    r = lbr_eval(resolve_target(args.target), seeds, args.deals, args.workers,
-                 args.rollouts, args.particles)
+    failed = False
+    try:
+        r = lbr_eval(resolve_target(args.target), seeds, args.deals, args.workers,
+                     args.rollouts, args.particles, max_inconsistent=args.max_inconsistent,
+                     check_model=not args.no_model_check)
+    except ModelCheckError as e:
+        r, failed = e.result, True
     st = r.stats
     print(f"LBR vs {args.target}: {r.mean_bb:+.3f} bb/deal  CI [{r.ci_low:+.3f}, {r.ci_high:+.3f}]"
           f"  deals {r.deals}  (particles {args.particles}, rollouts {args.rollouts})")
@@ -583,14 +661,23 @@ def main(argv=None) -> int:
         print(f"belief: mean alive {st['alive_sum'] / st['decisions']:.0f}  "
               f"inconsistent {st['inconsistent']}/{st['target_actions']}  rebuilds {st['rebuilds']}"
               f"  target re-simulations {st['target_calls']}")
+    print(f"model: re-simulation errors {st.get('model_errors', 0)}  shadow on_hand_end errors "
+          f"{st.get('shadow_errors', 0)}  problems {len(r.model_problems)}")
+    for problem in r.model_problems:
+        print(f"MODEL PROBLEM: {problem}")
     if args.out:
         with open(args.out, "w") as fh:
             json.dump({"target": args.target, "seeds": seeds, "deals_per_seed": args.deals,
                        "particles": args.particles, "rollouts": args.rollouts,
                        **{k: getattr(r, k) for k in ("mean_bb", "ci_low", "ci_high", "deals",
                                                      "decisions", "lbr_seconds", "wall_seconds",
-                                                     "target_errors", "stats")},
+                                                     "target_errors", "stats",
+                                                     "model_problems")},
                        "ms_per_decision": r.ms_per_decision}, fh, indent=1)
+    if failed:
+        print("LBR's model of the target is unreliable: do not use the value above "
+              "(--no-model-check to accept it anyway)")
+        return 2
     return 0
 
 
