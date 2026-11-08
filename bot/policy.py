@@ -458,6 +458,9 @@ class PolicyBot:
     exploit_features   with a blueprint base, compute Features for the maniac/station
                        re-runs while such a mode is active (False: those modes do not
                        apply to a blueprint base postflop)
+    strict_maniac      with a blueprint base, the maniac re-run needs a recent raise rate
+                       of at least exploit.STRICT_MANIAC_MIN_RATE (default True; False
+                       reproduces v3.1 exactly). The heuristic base is unaffected.
 
     The class itself and functools.partial(PolicyBot, ...) are picklable factories. The
     instance keeps settings only; everything per half lives in memory.
@@ -466,7 +469,7 @@ class PolicyBot:
     def __init__(self, params: HeuristicParams | None = None, use_blueprint: bool = True,
                  use_exploits: bool = True, purify: float = PURIFY,
                  blueprint_streets=tuple(Street), exploit_features: bool = True,
-                 base: str = DEFAULT_BASE) -> None:
+                 base: str = DEFAULT_BASE, strict_maniac: bool = True) -> None:
         if base not in BASES:
             raise ValueError(f"base must be one of {BASES}, not {base!r}")
         warmup()                  # once per process (a sim factory call is untimed)
@@ -478,6 +481,7 @@ class PolicyBot:
         self.base = base
         self.blueprint_streets = frozenset(Street(s) for s in blueprint_streets)
         self.exploit_features = bool(exploit_features)
+        self.strict_maniac = bool(strict_maniac)
         self.blueprint = w.blueprint if self.use_blueprint and w is not None else None
         self.tree = w.tree if w is not None else None
         self.cpu_factor = w.cpu_factor if w is not None else 1.0
@@ -639,7 +643,8 @@ class PolicyBot:
             if obs.street == Street.PREFLOP:
                 return self._heuristic_action(obs, memory, tm)[0]
             if (self.use_exploits and self.exploit_features
-                    and exploit.active_mode(_opponent(memory)) in _RERUN_MODES):
+                    and exploit.active_mode(_opponent(memory), self._strict(memory))
+                    in _RERUN_MODES):
                 iters = tm.iters(obs.pot, obs.street, obs.hand_index) if tm is not None else 0
                 return compute_features(obs, iters, memory["rng"])
         except Exception:
@@ -664,7 +669,14 @@ class PolicyBot:
         params and the half's counters. With a blueprint base feats is None postflop
         unless a re-run mode is active (_blueprint_extras)."""
         return apply_exploits(base, obs, feats, _opponent(memory), memory["rng"], self.params,
-                              memory.get("exploits"))
+                              memory.get("exploits"), self._strict(memory))
+
+    def _strict(self, memory) -> bool:
+        """strict_maniac applies on the blueprint base only (memory["base"]). Never raises."""
+        try:
+            return self.strict_maniac and memory.get("base") == "blueprint"
+        except Exception:
+            return False
 
     def _observe_cpu(self, memory, tm, dt: float) -> None:
         """Add an online sample and resize the grace: the larger of the (time-scaled)

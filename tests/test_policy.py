@@ -627,3 +627,30 @@ def test_candidate_agent_resolves_and_pickles():
     assert isinstance(mod.BOT, mod.policy.PolicyBot)
     h = play_half(fac, ZOO["calling_station"], "cand", 2, deals=20)
     assert h.errors_a == 0 and not h.forfeit_a
+
+
+def test_strict_maniac_skips_the_re_run_on_the_blueprint_base(monkeypatch):
+    # A selectively aggressive opponent (is_maniac, but a 0.6 raise rate) gets the maniac
+    # re-run only without strict_maniac; with it (the default) the blueprint's action stands.
+    from bot.opponent import OpponentModel
+    monkeypatch.setattr(OpponentModel, "is_maniac", lambda self: True)
+    monkeypatch.setattr(OpponentModel, "recent_raise_rate", property(lambda self: (0.6, 200)))
+    counts = {}
+    for label, bot in (("strict", policy.PolicyBot()), ("loose", policy.PolicyBot(strict_maniac=False))):
+        assert bot.blueprint is not None, "needs data/blueprint.npz"
+        memory = {}
+        bot.new_half(AgentConfig(), memory)
+        pick = random.Random(5)
+        for h in range(40):
+            g = Game(make_deal("strict", h), h % 2, hand_index=h)
+            while not g.is_terminal:
+                seat = g.to_act
+                obs = g.observation(seat)
+                a = bot.choose_action(obs, memory) if seat == 0 else pick.choice(obs.legal_actions)
+                assert a in obs.legal_actions
+                g.apply(a)
+        assert memory["base"] == "blueprint" and memory["layers"]["heuristic"] == 0
+        assert sum(memory["faults"].values()) == 0
+        counts[label] = (memory["exploits"]["maniac"], memory["exploits"]["maniac_changed"])
+    assert counts["strict"] == (0, 0)
+    assert counts["loose"][0] > 0 and counts["loose"][1] > 0
