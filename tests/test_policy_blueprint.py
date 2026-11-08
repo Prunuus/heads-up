@@ -309,3 +309,97 @@ def test_blueprint_bot_factories_are_picklable():
     bot = fac()
     assert bot.purify == 0.2 and bot.blueprint_streets == frozenset({Street.RIVER})
     assert bot.exploit_features is False
+
+
+# ------------------------------------------------------------ the auto base (Task 20b)
+
+class _Opp:
+    """Duck-typed OpponentModel for policy.select_base: only raise_rate(street)."""
+
+    def __init__(self, rate=0.0, n=0):
+        self.rate, self.n = rate, n
+
+    def raise_rate(self, street):
+        return (self.rate, self.n) if int(street) == 0 else (0.5, 999)
+
+
+def test_select_base_defaults_to_the_blueprint_without_evidence():
+    assert policy.select_base(None, "blueprint") == "blueprint"
+    assert policy.select_base(object(), "blueprint") == "blueprint"       # no raise_rate
+    assert policy.select_base(_Opp(0.0, policy.AUTO_MIN_N - 1), "blueprint") == "blueprint"
+    assert policy.select_base(_Opp(float("nan"), 500), "blueprint") == "blueprint"
+
+
+def test_select_base_goes_heuristic_vs_a_passive_opponent():
+    assert policy.select_base(_Opp(0.0, policy.AUTO_MIN_N), "blueprint") == "heuristic"
+    assert policy.select_base(_Opp(policy.AUTO_ENTER, 300), "blueprint") == "heuristic"
+    assert policy.select_base(_Opp(policy.AUTO_ENTER + 0.01, 300), "blueprint") == "blueprint"
+    assert policy.select_base(_Opp(0.4, 300), "blueprint") == "blueprint"
+
+
+def test_select_base_has_hysteresis():
+    mid = (policy.AUTO_ENTER + policy.AUTO_EXIT) / 2
+    assert policy.select_base(_Opp(mid, 300), "heuristic") == "heuristic"   # stays
+    assert policy.select_base(_Opp(mid, 300), "blueprint") == "blueprint"   # stays
+    assert policy.select_base(_Opp(policy.AUTO_EXIT, 300), "heuristic") == "blueprint"
+    assert policy.select_base(_Opp(0.0, 10), "heuristic") == "heuristic"    # no n needed to stay
+
+
+def test_select_base_never_raises():
+    class Bad:
+        def raise_rate(self, street):
+            raise RuntimeError("boom")
+
+    assert policy.select_base(Bad(), "heuristic") == "blueprint"
+    assert policy.select_base(_Opp(0.0, 500), "garbage") == "heuristic"
+
+
+def _passive_model(hands=40):
+    from bot.opponent import OpponentModel
+    opp = OpponentModel()
+    opp._raise_n[0], opp._raise_k[0] = 100, 2
+    return opp
+
+
+def test_auto_bot_switches_the_base_per_half_and_blueprint_is_the_default():
+    obs = _observations("auto-base", 12)
+    bot, memory = _bp_bot(use_exploits=False, base="auto")
+    assert memory["base"] == "blueprint"
+    for o in obs[:4]:
+        assert bot.choose_action(o, memory) == max(o.legal_actions)        # blueprint
+    memory["opp"] = _passive_model()
+    for o in obs[4:]:
+        bot.choose_action(o, memory)
+    assert memory["base"] == "heuristic"
+    assert memory["layers"]["blueprint"] == 4
+    assert memory["layers"]["heuristic"] >= len(obs) - 4
+    assert sum(memory["faults"].values()) == 0
+    bot2, memory2 = _bp_bot(use_exploits=False, base="auto")       # a fresh half starts over
+    assert memory2["base"] == "blueprint"
+
+
+def test_fixed_bases_ignore_the_opponent():
+    obs = _observations("fixed-base", 10)
+    bot, memory = _bp_bot(use_exploits=False, base="blueprint")
+    memory["opp"] = _passive_model()
+    for o in obs:
+        assert bot.choose_action(o, memory) == max(o.legal_actions)
+    assert memory["layers"]["heuristic"] == 0
+    bot, memory = _bp_bot(use_exploits=False, base="heuristic")
+    for o in obs:
+        bot.choose_action(o, memory)
+    assert memory["layers"]["blueprint"] == 0
+    with pytest.raises(ValueError):
+        policy.PolicyBot(base="nonsense")
+
+
+def test_a_failing_selector_keeps_the_blueprint(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("selector")
+
+    monkeypatch.setattr(policy, "select_base", boom)
+    bot, memory = _bp_bot(use_exploits=False, base="auto")
+    for o in _observations("auto-fault", 8):
+        assert bot.choose_action(o, memory) == max(o.legal_actions)
+    assert memory["layers"]["heuristic"] == 0
+    assert sum(memory["faults"].values()) == 0

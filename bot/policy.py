@@ -95,6 +95,18 @@ DEFAULT_META = MappingProxyType({"stack": STARTING_STACK, "sb": SMALL_BLIND,
                                  "bb": BIG_BLIND, "cap": RAISE_CAP_PER_STREET})
 _CONFIG_KEYS = (("stack", "starting_stack"), ("sb", "small_blind"), ("bb", "big_blind"),
                 ("cap", "raise_cap"))
+# The auto base (Task 20b). The blueprint is the default base. Against an opponent that
+# almost never raises preflop (a passive bot) the heuristic base beats it: measured on TRAIN
+# the passive bots (preflop raise rate <= 0.10 after 400 hands) are where v2 > v3, while every
+# FIELD bot raises preflop 0.32-0.60 of the time it can. Enter the heuristic base at a rate
+# <= AUTO_ENTER over >= AUTO_MIN_N raise-legal preflop decisions, return to the blueprint at
+# a rate >= AUTO_EXIT (the band between keeps the current base).
+BASES = ("auto", "blueprint", "heuristic")
+DEFAULT_BASE = "blueprint"
+AUTO_MIN_N = 60
+AUTO_ENTER = 0.12
+AUTO_EXIT = 0.20
+
 FAULT_KINDS = ("blueprint", "heuristic", "exploit", "hand_end")
 LAYER_KEYS = ("blueprint", "heuristic", "node_miss")
 
@@ -222,6 +234,22 @@ def _opponent(memory) -> OpponentModel | None:
     except Exception:
         return None
     return opp if isinstance(opp, OpponentModel) else None
+
+
+def select_base(opp, current: str) -> str:
+    """The auto base for the next decision: "blueprint" or "heuristic", from the opponent's
+    preflop raise rate (module constants above) and the current base (hysteresis). Pure and
+    deterministic; any problem with opp means the blueprint."""
+    try:
+        rate, n = opp.raise_rate(Street.PREFLOP)
+        rate, n = float(rate), int(n)
+        if not 0.0 <= rate <= 1.0:
+            return "blueprint"
+        if current == "heuristic":
+            return "blueprint" if rate >= AUTO_EXIT else "heuristic"
+        return "heuristic" if n >= AUTO_MIN_N and rate <= AUTO_ENTER else "blueprint"
+    except Exception:
+        return "blueprint"
 
 
 def _clamp_factor(f: float) -> float:
@@ -421,6 +449,8 @@ class PolicyBot:
     params             heuristic thresholds (default HeuristicParams())
     use_blueprint      consult the blueprint when one is loaded and the game matches it;
                        False is v2 (the heuristic base, decision for decision)
+    base               "blueprint" (default), "heuristic", or "auto": the blueprint until the
+                       opponent looks passive (select_base), then the heuristic (Task 20b)
     use_exploits       run the exploit layer on the base action
     purify             Blueprint.act's purification threshold (default PURIFY)
     blueprint_streets  the streets on which the blueprint is consulted (default all)
@@ -434,13 +464,17 @@ class PolicyBot:
 
     def __init__(self, params: HeuristicParams | None = None, use_blueprint: bool = True,
                  use_exploits: bool = True, purify: float = PURIFY,
-                 blueprint_streets=tuple(Street), exploit_features: bool = True) -> None:
+                 blueprint_streets=tuple(Street), exploit_features: bool = True,
+                 base: str = DEFAULT_BASE) -> None:
+        if base not in BASES:
+            raise ValueError(f"base must be one of {BASES}, not {base!r}")
         warmup()                  # once per process (a sim factory call is untimed)
         w = WARMUP
         self.params = params if params is not None else HeuristicParams()
         self.use_blueprint = bool(use_blueprint)
         self.use_exploits = bool(use_exploits)
         self.purify = float(purify)
+        self.base = base
         self.blueprint_streets = frozenset(Street(s) for s in blueprint_streets)
         self.exploit_features = bool(exploit_features)
         self.blueprint = w.blueprint if self.use_blueprint and w is not None else None
@@ -476,6 +510,7 @@ class PolicyBot:
             memory["faults"] = dict.fromkeys(FAULT_KINDS, 0)
             memory["exploits"] = dict.fromkeys(exploit.STAT_KEYS, 0)
             memory["layers"] = dict.fromkeys(LAYER_KEYS, 0)
+            memory["base"] = "blueprint"    # the base in force (auto switches it per half)
             memory["bucket"] = None         # ((street, hole, board), bucket) of the last lookup
         except Exception:
             pass
@@ -520,7 +555,7 @@ class PolicyBot:
             config_ok = memory["config_ok"] is True
         except Exception:
             config_ok = False
-        if self.blueprint is not None and config_ok:
+        if self.blueprint is not None and config_ok and self._use_blueprint_now(memory):
             try:
                 base = self._blueprint_action(obs, memory)
                 if base is not None:
@@ -556,6 +591,20 @@ class PolicyBot:
             except Exception:
                 _fault(memory, "exploit")
         return action if _legal(action, obs) else fallback_action(obs)
+
+    def _use_blueprint_now(self, memory) -> bool:
+        """Whether the blueprint is the base for this decision: always for base="blueprint",
+        never for "heuristic", and for "auto" what select_base says (memory["base"] holds
+        the base in force). Never raises: a failure means the blueprint."""
+        try:
+            if self.base == "heuristic":
+                return False
+            if self.base == "auto":
+                memory["base"] = select_base(_opponent(memory), memory.get("base"))
+                return memory["base"] == "blueprint"
+        except Exception:
+            pass
+        return True
 
     def _blueprint_action(self, obs, memory):
         """node_of -> bucket (cached per street, hole and board) -> Blueprint.act.

@@ -64,6 +64,8 @@ def bot(label: str):
     maniac/station re-runs on a blueprint base)."""
     if label == "v3":
         return bot_file_factory("agent.py")
+    if label == "v31":
+        return functools.partial(_policy_bot, base="auto")
     if label == "v2":
         return functools.partial(_policy_bot, use_blueprint=False)
     if label == "v3_post":
@@ -145,7 +147,8 @@ def _run(jobs: list, out: Path, workers: int) -> dict:
 
 
 def jobs_a(args) -> list:
-    return [(_key("a", "v3", "v2", s, args.deals, 1.0), "v3", "v2", True, s, args.deals, 1.0)
+    c, o = args.candidate, args.h2h_opponent
+    return [(_key("a", c, o, s, args.deals, 1.0), c, o, True, s, args.deals, 1.0)
             for s in [f"g3h{i}" for i in range(1, args.h2h_seeds + 1)]]
 
 
@@ -153,12 +156,14 @@ def jobs_b(args) -> list:
     opps = splits()["holdout"] + splits()["field"]
     seeds = [f"g3f{i}" for i in range(1, args.focus_seeds + 1)]
     return [(_key("b", who, o, s, args.deals, ts), who, o, False, s, args.deals, ts)
-            for ts in args.scales for who in ("v3", "v2") for o in opps for s in seeds]
+            for ts in args.scales for who in (args.candidate, "v2") for o in opps for s in seeds]
 
 
 def jobs_e(args) -> list:
     seeds = [f"g3p{i}" for i in range(1, args.sweep_seeds + 1)]
     labels = ["v2"] + [f"v3_p{p:g}" for p in args.purify] + list(args.extra)
+    if args.candidate != "v3":
+        labels = ["v2", args.candidate]
     return [(_key("e", who, o, s, args.sweep_deals, 1.0), who, o, False, s, args.sweep_deals, 1.0)
             for who in labels for o in splits()["train"] for s in seeds]
 
@@ -256,34 +261,35 @@ def _pooled(recs) -> np.ndarray:
 
 def summarize(args, ra: dict, rb: dict, rd: dict, re_: dict) -> list:
     L = []
+    C = args.candidate
     if ra:
         rs = sorted(ra.values(), key=lambda r: r["seed"])
-        L += ["(a) v3 vs v2 head-to-head, v3's bb/deal (paired duplicate halves)",
+        L += [f"(a) {C} vs {args.h2h_opponent} head-to-head, {C}'s bb/deal (paired duplicate halves)",
               f"    pooled {len(rs)} seeds x {rs[0]['deals']} deals: {_ci(_pooled(rs))}   "
               f"verdicts {' '.join(r['verdict'] for r in rs)}",
               "    per seed: " + "  ".join(f"{r['seed']} {r['mean_bb']:+.2f}" for r in rs), ""]
     if rb:
         sp = splits()
         L += ["(b) expected points vs HOLDOUT / FIELD (opp bank = opponent's max bank per half, s)",
-              f"    {'scale':>5} {'split':8} {'v3 pts':>7} {'v2 pts':>7} {'v3 bb':>8} {'v2 bb':>8}"
-              f"   v3 - v2 paired bb/deal [95% CI]"]
+              f"    {'scale':>5} {'split':8} {C + ' pts':>7} {'v2 pts':>7} {C + ' bb':>8} {'v2 bb':>8}"
+              f"   {C} - v2 paired bb/deal [95% CI]"]
         for ts in args.scales:
             for split in ("holdout", "field"):
                 pick = {who: sorted((r for r in rb.values() if r["a"] == who and r["b"] in sp[split]
                                      and r["time_scale"] == ts), key=lambda r: (r["b"], r["seed"]))
-                        for who in ("v3", "v2")}
-                if not pick["v3"] or not pick["v2"]:
+                        for who in (C, "v2")}
+                if not pick[C] or not pick["v2"]:
                     continue
                 pts = {w: np.mean([r["points_a"] for r in v]) for w, v in pick.items()}
                 bb = {w: np.mean([r["mean_bb"] for r in v]) for w, v in pick.items()}
                 pair = {(r["b"], r["seed"]): r for r in pick["v2"]}
                 diffs = [np.asarray(r["per_deal_bb"]) - np.asarray(pair[(r["b"], r["seed"])]["per_deal_bb"])
-                         for r in pick["v3"] if (r["b"], r["seed"]) in pair]
-                L.append(f"    {ts:5g} {split:8} {pts['v3']:7.3f} {pts['v2']:7.3f} {bb['v3']:+8.3f} "
+                         for r in pick[C] if (r["b"], r["seed"]) in pair]
+                L.append(f"    {ts:5g} {split:8} {pts[C]:7.3f} {pts['v2']:7.3f} {bb[C]:+8.3f} "
                          f"{bb['v2']:+8.3f}   {_ci(np.concatenate(diffs)) if diffs else 'n/a'}")
             for o in sp["holdout"] + sp["field"]:
                 row = []
-                for who in ("v3", "v2"):
+                for who in (C, "v2"):
                     rs = [r for r in rb.values() if r["a"] == who and r["b"] == o and r["time_scale"] == ts]
                     if rs:
                         row.append(f"{who} {np.mean([r['points_a'] for r in rs]):.2f} pts "
@@ -294,9 +300,9 @@ def summarize(args, ra: dict, rb: dict, rd: dict, re_: dict) -> list:
         L.append("")
     allm = list(ra.values()) + list(rb.values())
     if allm:
-        mine = [r for r in allm if r["a"] == "v3"]
-        v3_err = sum(sum(r["errors_a"]) for r in allm if r["a"] == "v3")
-        v3_ff = sum(sum(r["forfeit_a"]) for r in allm if r["a"] == "v3")
+        mine = [r for r in allm if r["a"] == C]
+        v3_err = sum(sum(r["errors_a"]) for r in allm if r["a"] == C)
+        v3_ff = sum(sum(r["forfeit_a"]) for r in allm if r["a"] == C)
         v2_err = sum(sum(r["errors_b"]) for r in ra.values()) + sum(
             sum(r["errors_a"]) for r in rb.values() if r["a"] == "v2")
         v3_bank = max(max(r["bank_a"]) for r in mine)
@@ -320,9 +326,10 @@ def summarize(args, ra: dict, rb: dict, rd: dict, re_: dict) -> list:
             L.append(f"    LBR(v3) - LBR(v2), paired on common deals: {_ci(d)}")
         L.append("")
     if re_:
-        L.append("(e) purify sweep on TRAIN: v3(purify) - v2, paired bb/deal [95% CI]")
+        L.append(f"(e) {C} on TRAIN (v3: purify sweep): {C} - v2, paired bb/deal [95% CI]")
         v2 = {(r["b"], r["seed"]): r for r in re_.values() if r["a"] == "v2"}
-        for lab in [f"v3_p{p:g}" for p in args.purify] + list(args.extra):
+        labs = [f"v3_p{p:g}" for p in args.purify] + list(args.extra)
+        for lab in labs if C == "v3" else [C]:
             rs = [r for r in re_.values() if r["a"] == lab and (r["b"], r["seed"]) in v2]
             if rs:
                 d = np.concatenate([np.asarray(r["per_deal_bb"]) - np.asarray(v2[(r["b"], r["seed"])]["per_deal_bb"])
@@ -383,6 +390,9 @@ def main(argv=None) -> int:
     ap.add_argument("--purify", type=float, nargs="+", default=list(PURIFY_SWEEP))
     ap.add_argument("--extra", nargs="*", default=[],
                     help="more section-e variants vs v2 on TRAIN: v3_post, v3_nofeat")
+    ap.add_argument("--candidate", default="v3",
+                    help="the bot under test in the v3 role (a, b, e, c): v3, or v31 (auto base)")
+    ap.add_argument("--h2h-opponent", default="v2", help="section a opponent: v2 or v3")
     ap.add_argument("--summary-only", action="store_true")
     ap.add_argument("--allow-no-blueprint", action="store_true",
                     help="run sections a, b, d, e although no blueprint loads (v3 would equal v2)")
