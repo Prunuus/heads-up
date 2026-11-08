@@ -405,8 +405,8 @@ def test_a_failing_selector_keeps_the_blueprint(monkeypatch):
     assert sum(memory["faults"].values()) == 0
 
 
-def test_the_default_base_is_auto_and_starts_on_the_blueprint():
-    assert policy.DEFAULT_BASE == "auto" and policy.PolicyBot().base == "auto"
+def test_the_default_base_is_the_blueprint():
+    assert policy.DEFAULT_BASE == "blueprint" and policy.PolicyBot().base == "blueprint"
     bot, memory = _bp_bot(use_exploits=False)
     assert memory["base"] == "blueprint"
     for o in _observations("default-auto", 6):
