@@ -384,6 +384,8 @@ def main(argv=None) -> int:
     ap.add_argument("--extra", nargs="*", default=[],
                     help="more section-e variants vs v2 on TRAIN: v3_post, v3_nofeat")
     ap.add_argument("--summary-only", action="store_true")
+    ap.add_argument("--allow-no-blueprint", action="store_true",
+                    help="run sections a, b, d, e although no blueprint loads (v3 would equal v2)")
     args = ap.parse_args(argv)
     if args.cpus:
         os.sched_setaffinity(0, _cpus(args.cpus))
@@ -401,6 +403,10 @@ def main(argv=None) -> int:
           f", warmup failed {w.failed}, cpus {sorted(os.sched_getaffinity(0))}, "
           f"load {os.getloadavg()[0]:.1f}, out {out}", flush=True)
     secs = set(args.sections)
+    if bp is None and secs & set("abde") and not args.allow_no_blueprint:
+        print("refusing: no blueprint loaded, so v3 = v2 and the deltas would be meaningless "
+              "(--allow-no-blueprint to run anyway)", file=sys.stderr)
+        return 4
     run = not args.summary_only
     t0 = time.time()
     ra = rb = rd = re_ = {}

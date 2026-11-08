@@ -51,3 +51,22 @@ def test_gate_refuses_a_cache_from_another_blueprint(tmp_path, capsys):
         '{"iterations": -1, "seed": 0, "buckets_sha256": "x"}')
     assert gate_v3.main(["--out", str(tmp_path), "--sections", "a", "--summary-only"]) == 3
     assert "refusing" in capsys.readouterr().out
+
+
+def test_gate_refuses_without_blueprint(tmp_path, capsys, monkeypatch):
+    from types import SimpleNamespace
+    from bot import policy
+    monkeypatch.setattr(policy, "warmup", lambda: None)
+    monkeypatch.setattr(policy, "WARMUP", SimpleNamespace(blueprint=None, failed=0))
+    argv = ["--out", str(tmp_path), "--sections", "a"]
+    assert gate_v3.main(argv) == 4
+    assert "no blueprint loaded" in capsys.readouterr().err
+    # the escape gets past the check (summary-only section c runs nothing)
+    assert gate_v3.main(["--out", str(tmp_path), "--sections", "c", "--summary-only"]) == 0
+    monkeypatch.setattr(gate_v3, "jobs_a", lambda a: (_ for _ in ()).throw(RuntimeError("past"))) 
+    try:
+        gate_v3.main(argv + ["--allow-no-blueprint"])
+    except RuntimeError as e:
+        assert str(e) == "past"
+    else:
+        raise AssertionError("did not proceed")
