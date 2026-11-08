@@ -400,6 +400,17 @@ def test_node_from_actions(tree):
     assert node_from_actions((1, 1), None) is None
 
 
+def test_node_from_actions_accepts_numpy_integers_but_not_bools(tree):
+    """Trainer input (Task 18): action codes straight from numpy arrays."""
+    flop = tree.key_to_node[(1, 1)]
+    assert node_from_actions(np.array([1, 1]), tree) == flop
+    assert node_from_actions((np.int8(1), np.int64(1)), tree) == flop
+    assert node_from_actions(np.array([1, 1], dtype=np.uint8), tree) == flop
+    assert node_from_actions(np.array([], dtype=np.int64), tree) == 0
+    for bad in (np.array([True, True]), (np.True_, np.True_), np.array([1.0, 1.0]), (np.float32(1), 1)):
+        assert node_from_actions(bad, tree) is None, bad
+
+
 def test_node_of_median_under_20us(tree):
     rng = random.Random(20)
     observations = []

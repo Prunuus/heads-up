@@ -158,15 +158,16 @@ def get_tree() -> BettingTree:
     return build_tree()
 
 
-def _codes(values) -> tuple[int, ...] | None:
+def _codes(values, numpy_ints: bool = False) -> tuple[int, ...] | None:
     """Action codes as plain ints, or None if any value is not an int.
 
     An Action from any copy of game.py and a plain int code both count. A bool, float,
-    str or numpy integer does not, even though int() would turn it into a code.
+    str or numpy integer does not, even though int() would turn it into a code. With
+    numpy_ints, a numpy integer counts too (a numpy bool is not a numpy integer).
     """
     codes = []
     for x in values:
-        if x.__class__ is bool or not isinstance(x, int):
+        if x.__class__ is bool or not (isinstance(x, int) or numpy_ints and isinstance(x, np.integer)):
             return None
         codes.append(int(x))
     return tuple(codes)
@@ -175,11 +176,12 @@ def _codes(values) -> tuple[int, ...] | None:
 def node_from_actions(actions: tuple[int, ...], tree: BettingTree) -> int | None:
     """Decision node reached by these action codes from the root (() is the root).
 
-    None for a sequence outside the tree (illegal, or ending in a terminal) or malformed
-    input. Never raises.
+    The codes may be ints, Actions or numpy integers (trainer input, e.g. a row of a numpy
+    array), never bools. None for a sequence outside the tree (illegal, or ending in a
+    terminal) or malformed input. Never raises.
     """
     try:
-        key = _codes(actions)
+        key = _codes(actions, numpy_ints=True)
         return None if key is None else tree.key_to_node.get(key)
     except Exception:
         return None
