@@ -1,4 +1,4 @@
-"""Frozen v0.4 first-matching decision trees and legal-action guards."""
+"""Opponent-conditioned decision trees and legal-action guards."""
 from game import Action, Observation, Street
 from dataclasses import dataclass
 from poker_eval import FULL, REDUCED, assess, preflop_score
@@ -63,22 +63,33 @@ def validate(obs, memory):
         v = getattr(obs, field)
         if type(v) is not int or v < 0:
             raise ValueError("invalid chip/index quantity " + field)
-    if (obs.big_blind <= 0 or obs.pot < obs.my_bet + obs.opp_bet
+    cfg = memory["config"]
+    if (type(obs.is_button) is not bool or type(obs.big_blind) is not int
+            or obs.big_blind != cfg.big_blind
+            or obs.pot < obs.my_bet + obs.opp_bet
+            or obs.pot + obs.my_stack + obs.opp_stack != 2 * cfg.starting_stack
+            or obs.my_bet + obs.my_stack > cfg.starting_stack
+            or obs.opp_bet + obs.opp_stack > cfg.starting_stack
             or obs.to_call != max(0, obs.opp_bet - obs.my_bet)
-            or obs.hand_index >= memory["config"].num_hands
-            or obs.raises_this_street > memory["config"].raise_cap
-            or len(obs.action_history) > 64):
+            or obs.min_raise_to <= obs.opp_bet
+            or obs.hand_index >= cfg.num_hands
+            or obs.raises_this_street > cfg.raise_cap
+            or len(obs.action_history) > 4 * (cfg.raise_cap + 2)):
         raise ValueError("inconsistent observation")
 
 
 def raise_valid(obs, action, cap=None):
-    if action not in obs.legal_actions:
+    if action not in (HALF, POT) or action not in obs.legal_actions:
         return False
     total = obs.raise_to.get(action)
     if type(total) is not int:
         return False
     cost = total - obs.my_bet
-    return (0 < cost <= obs.my_stack and cost >= min(obs.to_call, obs.my_stack)
+    all_in_to = obs.my_bet + obs.my_stack
+    pot_raise_to = obs.opp_bet + obs.pot + obs.to_call
+    return (obs.opp_stack > 0 and obs.my_stack > obs.to_call
+            and obs.opp_bet < total <= min(all_in_to, pot_raise_to)
+            and (total >= obs.min_raise_to or total == all_in_to)
             and (cap is None or cost <= cap * obs.my_stack))
 
 
@@ -237,10 +248,6 @@ def choose(obs, memory):
         else:
             key = (obs.hand_index, obs.street, obs.board)
             if key not in memory["cache"]:
-                if any(k[1] == obs.street for k in memory["cache"]):
-                    raise ValueError("visible board changed within street")
-                if any(k[1] > obs.street or obs.board[:len(k[2])] != k[2] for k in memory["cache"]):
-                    raise ValueError("backwards street or changed board prefix")
                 memory["cache"][key] = assess(obs.hole_cards, obs.board, memory["mode"])
                 memory["cache_misses"] += 1
             else:
