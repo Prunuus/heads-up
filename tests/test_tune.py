@@ -10,9 +10,12 @@ import pytest
 from bot.heuristic import HeuristicParams
 from game import Action
 from sim.match import play_match
-from sim.opponents import ZOO
-from sim.tune import (DEFAULT_SPACE, MATCH_DEALS, Score, _seed_groups, expected_points,
-                      main, objective, params_diff, score_matches, search, tune)
+from sim.opponents import HOLDOUT, TRAIN, ZOO
+from sim.tune import (MATCH_DEALS, Score, _seed_groups, default_space, expected_points,
+                      main, objective, params_diff, score_matches, search, train_opponents,
+                      tune)
+
+DEFAULT_SPACE = default_space()
 
 SMALL = {"open_min": [0.40, 0.44, 0.48], "call_margin": [0.0, 0.02, 0.04]}
 
@@ -134,13 +137,19 @@ def test_search_rejects_a_bad_space_before_any_match(space):
     assert calls == []
 
 
-def test_default_space_is_valid_and_centred_on_the_defaults():
-    base = HeuristicParams()
-    for name, values in DEFAULT_SPACE.items():
-        assert values[len(values) // 2] == getattr(base, name), name
+@pytest.mark.parametrize("base", [HeuristicParams(), HeuristicParams(
+    open_min=0.48, call_margin=0.0, value_raise=(0.74, 0.79, 0.84), bluff_freq=0.05)])
+def test_default_space_is_valid_and_centred_on_the_base(base):
+    space = default_space(base)
+    assert set(space) == {f.name for f in dataclasses.fields(HeuristicParams)}
+    for name, values in space.items():
+        assert len(values) == 3 and values[1] == getattr(base, name), name
         for v in values:
             HeuristicParams(**{name: v})
-    assert set(DEFAULT_SPACE) == {f.name for f in dataclasses.fields(HeuristicParams)}
+    assert default_space(base)["open_min"] == [round(base.open_min + d, 4) for d in (-0.04, 0, 0.04)]
+    # Task 12's run: centred on the T10 v1 values
+    t10 = default_space(HeuristicParams(open_min=0.44))
+    assert t10["open_min"] == [0.40, 0.44, 0.48]
 
 
 def test_seed_groups_rotate_through_the_pool():
@@ -153,24 +162,55 @@ def test_seed_groups_rotate_through_the_pool():
 def test_tune_runs_real_matches_on_common_seeds():
     seen = []
     # budget 6: a random batch of 4 (the base + 3), then one descent batch of 2
-    best = tune(SMALL, {"cs": ZOO["calling_station"]}, ["u1", "u2", "u3"], deals=8, budget=6,
+    best = tune(SMALL, ["calling_station"], ["u1", "u2", "u3"], deals=8, budget=6,
                 workers=1, time_scale=2.5, batch_seeds=2, on_step=seen.append)
     assert isinstance(best, HeuristicParams) and best in [s.params for s in seen]
     assert [s.batch for s in seen] == [0, 0, 0, 0, 1, 1]
     assert seen[0].seeds == ("u1", "u2") and seen[-1].seeds == ("u3", "u1")
     assert all(s.score.errors == 0 and s.score.forfeits == 0 for s in seen)
-    assert all(set(s.score.per_opponent) == {"cs"} for s in seen)
+    assert all(set(s.score.per_opponent) == {"calling_station"} for s in seen)
 
 
 def test_cli_logs_every_evaluation(tmp_path, capsys):
     out = tmp_path / "t.jsonl"
     assert main(["--budget", "2", "--seeds", "1", "--deals", "4", "--workers", "1",
-                 "--opponents", "holdout", "--out", str(out)]) == 0
+                 "--opponents", "nit,calling_station", "--out", str(out)]) == 0
     rows = [json.loads(line) for line in out.read_text().splitlines()]
     assert len(rows) == 2 and rows[0]["params"] == {} and rows[0]["seeds"] == ["t1"]
-    assert set(rows[0]["per_opponent"]) == {"llm_time_careful", "llm_aggressive",
-                                            "llm_opp_model", "threshold_cat"}
+    assert set(rows[0]["per_opponent"]) == {"nit", "calling_station"}
     assert "best (vs defaults)" in capsys.readouterr().out
+
+
+# ---- the tuner sees TRAIN opponents only, by construction (plan: never tune on HOLDOUT)
+
+def test_train_opponents_is_the_train_split_or_train_members():
+    assert set(train_opponents("train")) == TRAIN
+    assert all(train_opponents("train")[n] is ZOO[n] for n in TRAIN)
+    assert list(train_opponents(["nit", "calling_station"])) == ["nit", "calling_station"]
+    assert train_opponents(("nit",))["nit"] is ZOO["nit"]      # factories come from ZOO
+
+
+@pytest.mark.parametrize("bad", ["holdout", "all", "field", "zoo", "", [], ["llm_opp_model"],
+                                 ["nit", "threshold_cat"], ["agentic_gto"], ["no_such_bot"],
+                                 {"nit": ZOO["nit"]}, {"llm_opp_model": ZOO["llm_opp_model"]},
+                                 "nit", None, 3])
+def test_the_tuner_refuses_anything_but_train(bad):
+    assert HOLDOUT and not HOLDOUT & TRAIN
+    with pytest.raises(ValueError):
+        train_opponents(bad)
+    calls = []
+    with pytest.raises(ValueError):
+        tune(SMALL, bad, ["u1"], deals=4, budget=2, workers=1,
+             on_step=lambda st: calls.append(st))
+    assert calls == []                              # refused before any match
+
+
+@pytest.mark.parametrize("bad", ["holdout", "all", "llm_opp_model", "nit,threshold_cat"])
+def test_the_cli_refuses_anything_but_train(bad, tmp_path):
+    with pytest.raises(SystemExit):
+        main(["--budget", "1", "--seeds", "1", "--deals", "2", "--workers", "1",
+              "--opponents", bad, "--out", str(tmp_path / "t.jsonl")])
+    assert not (tmp_path / "t.jsonl").exists() or (tmp_path / "t.jsonl").read_text() == ""
 
 
 def test_params_diff_lists_only_changed_fields():

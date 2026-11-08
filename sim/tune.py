@@ -23,6 +23,12 @@ every batch, which damps the winner's curse (T10 review M8). The budget counts c
 evaluations, incumbents included. Every parameter set is a HeuristicParams, whose
 constructor rejects non-finite values and short tuples (M3).
 
+Opponents: TRAIN only, by construction (train_opponents). The plan forbids tuning against
+HOLDOUT, and every other split (FIELD, "all") is held out too, so the tuner takes the
+TRAIN split or names of TRAIN members and looks their factories up in the ZOO itself;
+anything else raises before a match is played. Held-out evaluation (the M1 gate) belongs
+to sim.tournament / sim.heuristic_bot.
+
 CLI (repo root; Track A pins to CPUs 0-7, ruling R32):
   taskset -c 0-7 .venv/bin/python -m sim.tune --budget 80 --seeds 8 --batch-seeds 2 \\
       --deals 500 --workers 6 --time-scale 2.5 --out tune.jsonl
@@ -46,29 +52,34 @@ import numpy as np
 
 from bot.heuristic import HeuristicParams
 from bot.policy import PolicyBot
-from sim.tournament import Z, _per_deal_bb, _run_job, select_opponents
+from sim.tournament import Z, _per_deal_bb, _run_job
 
 MATCH_DEALS = 1000          # paired deals in a tournament match (both halves)
 BB_WEIGHT = 0.01            # D1: expected points + 0.01 * mean bb/deal
 
-# The search space: candidate values for each parameter, the T10 v1 default in the
-# middle. Per-street fields move all three streets together.
-DEFAULT_SPACE: dict = {
-    "open_min": [0.40, 0.44, 0.48],
-    "threebet_min": [0.50, 0.53, 0.56],
-    "call_margin": [0.0, 0.02, 0.04],
-    "range_discount": [(0.06, 0.04, 0.02), (0.10, 0.08, 0.06), (0.14, 0.12, 0.10)],
-    "value_raise": [(0.66, 0.71, 0.76), (0.70, 0.75, 0.80), (0.74, 0.79, 0.84)],
-    "pot_vs_half_cut": [0.80, 0.85, 0.90],
-    "bluff_freq": [0.05, 0.10, 0.15],
-    "nonnut_penalty": [0.04, 0.08, 0.12],
-    "range_weight": [0.6, 0.7, 0.8],
-    "bet_range": [(0.46, 0.51, 0.51), (0.50, 0.55, 0.55), (0.54, 0.59, 0.59)],
-    "raise_step": [0.05, 0.10, 0.15],
-    "thin_value": [(0.59, 0.61, 0.63), (0.62, 0.64, 0.66), (0.65, 0.67, 0.69)],
-    "pre_discount": [0.04, 0.07, 0.10],
-    "ip_thin_shift": [0.03, 0.06, 0.09],
+# The search space: for each parameter, its base value and one step either side (per-street
+# fields move all three streets together). default_space() centres it on the current
+# defaults; Task 12's run used it centred on the T10 v1 values.
+STEPS: dict = {
+    "open_min": 0.04, "threebet_min": 0.03, "call_margin": 0.02, "range_discount": 0.04,
+    "value_raise": 0.04, "pot_vs_half_cut": 0.05, "bluff_freq": 0.05, "nonnut_penalty": 0.04,
+    "range_weight": 0.1, "bet_range": 0.04, "raise_step": 0.05, "thin_value": 0.03,
+    "pre_discount": 0.03, "ip_thin_shift": 0.03,
 }
+
+
+def default_space(base: HeuristicParams | None = None) -> dict:
+    """{field: [base - step, base, base + step]} for every field in STEPS (values rounded
+    to 4 places; a per-street tuple shifts as a whole)."""
+    base = base if base is not None else HeuristicParams()
+    space = {}
+    for name, step in STEPS.items():
+        v = getattr(base, name)
+        if isinstance(v, tuple):
+            space[name] = [tuple(round(x + k * step, 4) for x in v) for k in (-1, 0, 1)]
+        else:
+            space[name] = [round(v + k * step, 4) for k in (-1, 0, 1)]
+    return space
 
 
 @dataclass(frozen=True)
@@ -247,6 +258,25 @@ def search(space: dict, base: HeuristicParams, budget: int, evaluate: Evaluator,
 
 # --------------------------------------------------------------------------- tune
 
+def train_opponents(which="train") -> dict:
+    """{name: ZOO factory} for the TRAIN split ("train") or for a list or tuple of TRAIN
+    member names. Anything else raises ValueError: "holdout", "all", a FIELD or unknown
+    name, a bare name, and a dict of factories (no held-out bot can come in under a TRAIN
+    name)."""
+    from sim.opponents import TRAIN, ZOO
+    if isinstance(which, str):
+        if which != "train":
+            raise ValueError(f"the tuner plays TRAIN opponents only, not {which!r}")
+        return {k: v for k, v in ZOO.items() if k in TRAIN}
+    if not isinstance(which, (list, tuple)) or not which \
+            or not all(isinstance(n, str) for n in which):
+        raise ValueError(f"opponents must be 'train' or a list of TRAIN names, got {which!r}")
+    bad = [n for n in which if n not in TRAIN]
+    if bad:
+        raise ValueError(f"the tuner plays TRAIN opponents only; not in TRAIN: {bad}")
+    return {n: ZOO[n] for n in which}
+
+
 def _seed_groups(seeds: list, batch_seeds: int | None):
     """Batch k's seeds: all of them, or the k-th group of batch_seeds (cycling)."""
     seeds = [str(s) for s in seeds]
@@ -263,10 +293,11 @@ def tune(param_space: dict, opponents="train", seeds: list | None = None, deals:
          on_step: Callable[[Step], None] | None = None) -> HeuristicParams:
     """The best HeuristicParams found for PolicyBot(params) (module docstring).
 
-    opponents: "train" | "holdout" | "all" or {name: factory}. seeds: the seed pool
-    (default t1-t4). time_scale: the sim's emulated CPU slowdown (ruling R30b).
+    opponents: "train" or a list of TRAIN names (train_opponents; nothing else is
+    accepted). seeds: the seed pool (default t1-t4). time_scale: the sim's emulated CPU
+    slowdown (ruling R30b).
     """
-    opps = select_opponents(opponents) if isinstance(opponents, str) else dict(opponents)
+    opps = train_opponents(opponents)
     group = _seed_groups(seeds or [f"t{i}" for i in range(1, 5)], batch_seeds)
     base = base if base is not None else HeuristicParams()
     pool = None
@@ -325,7 +356,8 @@ def main(argv=None) -> int:
     ap.add_argument("--batch-seeds", type=int, default=0,
                     help="seeds per batch, rotating through the pool (0: all of them)")
     ap.add_argument("--deals", type=int, default=500)
-    ap.add_argument("--opponents", choices=["train", "holdout", "all"], default="train")
+    ap.add_argument("--opponents", default="train",
+                    help="train, or comma-separated TRAIN names (nothing held out)")
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--time-scale", type=float, default=2.5)
     ap.add_argument("--random-frac", type=float, default=0.5)
@@ -333,6 +365,11 @@ def main(argv=None) -> int:
     ap.add_argument("--rng-seed", type=int, default=0)
     ap.add_argument("--out", help="append one JSON line per evaluation here")
     args = ap.parse_args(argv)
+    opponents = "train" if args.opponents == "train" else args.opponents.split(",")
+    try:
+        train_opponents(opponents)
+    except ValueError as e:
+        ap.error(str(e))
     seeds = [f"{args.seed_prefix}{i}" for i in range(1, args.seeds + 1)]
     t0 = time.time()
     out = open(args.out, "a") if args.out else None
@@ -348,7 +385,7 @@ def main(argv=None) -> int:
             out.flush()
 
     try:
-        best = tune(DEFAULT_SPACE, args.opponents, seeds, args.deals, args.budget,
+        best = tune(default_space(), opponents, seeds, args.deals, args.budget,
                     args.workers, args.time_scale, batch_seeds=args.batch_seeds or None,
                     random_frac=args.random_frac, min_gain=args.min_gain,
                     rng_seed=args.rng_seed, on_step=on_step)

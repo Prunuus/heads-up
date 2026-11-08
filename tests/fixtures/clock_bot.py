@@ -1,18 +1,42 @@
-"""Test fixture: a bot file that budgets by its own clock, like the llm zoo bots.
-`time` is the clock it budgets by; `_wall` is a second handle on the real module."""
+"""Test fixture: a bot file that budgets by its own clock, like the llm and FIELD bots,
+importing it in every common way. The unscaled clock is reached through sys.modules at
+call time (sys is not a clock, so the sim leaves it alone)."""
+import sys
 import time
-import time as _wall
+import time as _time
+from time import monotonic as mono
+from time import perf_counter, perf_counter_ns, process_time
+from time import time as wall_time
 
 from game import Action
 
+CLOCKS = {"time.perf_counter": lambda: time.perf_counter(),
+          "_time.perf_counter": lambda: _time.perf_counter(),
+          "perf_counter": lambda: perf_counter(),
+          "perf_counter_ns": lambda: perf_counter_ns() / 1e9,
+          "mono": lambda: mono(),
+          "process_time": lambda: process_time(),
+          "wall_time": lambda: wall_time()}
+REAL = {"time.perf_counter": "perf_counter", "_time.perf_counter": "perf_counter",
+        "perf_counter": "perf_counter", "perf_counter_ns": "perf_counter", "mono": "monotonic",
+        "process_time": "process_time", "wall_time": "time"}
+
+
+def _readings(real):
+    """Each clock read back to back with its unscaled counterpart."""
+    return {k: (c(), getattr(real, REAL[k])()) for k, c in CLOCKS.items()}
+
 
 def new_half(config, memory):
-    p0, w0, m0, wm0 = time.perf_counter(), _wall.perf_counter(), time.monotonic(), _wall.monotonic()
-    while _wall.perf_counter() - w0 < 0.005:          # 5 ms of real work
+    real = sys.modules["time"]
+    a = _readings(real)
+    w0 = real.perf_counter()
+    while real.perf_counter() - w0 < 0.005:          # 5 ms of real (CPU) work
         pass
-    p1, w1, m1, wm1 = time.perf_counter(), _wall.perf_counter(), time.monotonic(), _wall.monotonic()
-    memory["probe"] = ((p1 - p0) / (w1 - w0), (m1 - m0) / (wm1 - wm0),
-                       time.sleep is _wall.sleep, abs(time.time() - _wall.time()))
+    b = _readings(real)
+    memory["ratios"] = {k: (b[k][0] - a[k][0]) / (b[k][1] - a[k][1]) for k in CLOCKS}
+    memory["sleep_is_real"] = time.sleep is real.sleep and _time.sleep is real.sleep
+    memory["wall_offset"] = abs(wall_time() - real.time())
 
 
 def choose_action(obs, memory):

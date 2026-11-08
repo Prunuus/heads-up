@@ -11,10 +11,11 @@ minus SIM_PLUMBING_S of HTTP plumbing per request (which the in-process sim does
 run), and on a slower CPU that plumbing is slower too: grace_for_time_scale(s). A bot
 that times itself would see the slow CPU too, so the bot is told: it gets the scale as
 SimAgentConfig.time_scale (our PolicyBot reads it and scales its own clock and CPU
-factor, bot/policy.py), and a bot file's module-level `time` (what the llm zoo bots
-budget by: time.perf_counter()) is replaced by a ScaledTime whose clocks run s times
-fast. A bot that bound a clock function under another name, or keeps its clock in a
-class module (the archetypes, which do fixed work), is not reached and spends as on this
+factor, bot/policy.py), and in a bot file every module-level global that is the time
+module (under any name) or one of its clock functions (CLOCK_NAMES, imported under any
+name) is replaced by a ScaledTime (or its clock), whose intervals run s times long. A
+clock kept anywhere else (inside a class, a closure or a helper module; the archetypes,
+which do fixed work and keep no clock) is not reached: such a bot spends as on this
 machine while it is charged as on the slow one.
 """
 
@@ -108,10 +109,29 @@ class ScaledTime:
         return getattr(time, name)
 
 
+CLOCK_NAMES = ("perf_counter", "monotonic", "time", "process_time",
+               "perf_counter_ns", "monotonic_ns", "time_ns", "process_time_ns")
+
+
 def _scale_bot_clock(bot: Any, scale: float) -> None:
-    """Give a bot file (a module) a ScaledTime for its module-level `time`."""
-    if scale != 1.0 and isinstance(bot, ModuleType) and getattr(bot, "time", None) is time:
-        bot.time = ScaledTime(scale)
+    """In a bot file (a module), replace every module-level global that is the time module
+    (whatever its name: `import time as _time` too) with a ScaledTime, and every one that
+    is a clock function of it (`from time import perf_counter`, under any name) with that
+    ScaledTime's version. One ScaledTime per bot, so all its clocks share their origin."""
+    if scale == 1.0 or not isinstance(bot, ModuleType):
+        return
+    clocks = [(getattr(time, n), n) for n in CLOCK_NAMES]
+    scaled = None
+    for name, value in list(vars(bot).items()):
+        if value is time:
+            replacement = scaled = scaled or ScaledTime(scale)
+        else:
+            clock = next((n for fn, n in clocks if value is fn), None)
+            if clock is None:
+                continue
+            scaled = scaled or ScaledTime(scale)
+            replacement = getattr(scaled, clock)
+        setattr(bot, name, replacement)
 
 
 def _scales(time_scale) -> tuple:

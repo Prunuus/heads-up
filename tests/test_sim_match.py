@@ -420,10 +420,11 @@ def test_time_scale_must_be_positive_and_finite(bad):
         play_half(call_factory, call_factory, "s1", 1, deals=1, time_scale=bad)
 
 
-def test_time_scale_scales_the_clock_a_bot_file_budgets_by():
-    # The llm zoo bots budget by time.perf_counter(); on a slow CPU they would see it, so
-    # the sim scales the `time` a bot file imported (not time.sleep, not other names).
-    probes = []
+def test_time_scale_scales_every_clock_a_bot_file_imported():
+    # The llm and FIELD bots budget by their own clock, imported as `time`, under an alias
+    # (`import time as _time`) or by function (`from time import perf_counter`). On a slow
+    # CPU every one of them would read the slowdown, so the sim scales them all.
+    seen = []
 
     def factory():
         m = load_bot_file("tests/fixtures/clock_bot.py")
@@ -431,15 +432,17 @@ def test_time_scale_scales_the_clock_a_bot_file_budgets_by():
 
         def new_half(config, memory):
             real_new_half(config, memory)
-            probes.append(memory["probe"])
+            seen.append((config.time_scale, memory))
         m.new_half = new_half
         return m
 
     play_half(factory, factory, "s1", 1, deals=1, time_scale=(2.5, 1.0))
-    plain, scaled = sorted(probes)
-    assert plain[:2] == (pytest.approx(1.0, rel=0.01), pytest.approx(1.0, rel=0.01))
-    assert scaled[:2] == (pytest.approx(2.5, rel=0.01), pytest.approx(2.5, rel=0.01))
-    assert scaled[2] and plain[2]                       # sleeping is not sped up
-    assert scaled[3] < 1.0                              # absolute times stay plausible
+    by_scale = dict(seen)
+    for scale in (1.0, 2.5):
+        mem = by_scale[scale]
+        assert mem["ratios"] == {k: pytest.approx(scale, rel=0.01) for k in mem["ratios"]}, scale
+        assert mem["sleep_is_real"]                     # sleeping is not sped up
+        assert mem["wall_offset"] < 1.0                 # absolute times stay plausible
     import time
-    assert load_bot_file("tests/fixtures/clock_bot.py").time is time   # loads are untouched
+    m = load_bot_file("tests/fixtures/clock_bot.py")   # a load alone patches nothing
+    assert m.time is time and m._time is time and m.perf_counter is time.perf_counter
