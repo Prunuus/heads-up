@@ -1,0 +1,473 @@
+# Review package: b9d1c7e..4f71c90
+
+## Commits
+4f71c90 Add the blueprint export and the runtime sampler.
+
+## Files changed
+ bot/strategy.py        | 179 +++++++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_strategy.py | 167 +++++++++++++++++++++++++++++++++++++++++++++
+ train/README.md        |   6 ++
+ train/export.py        |  75 +++++++++++++++++++++
+ 4 files changed, 427 insertions(+)
+
+## Diff
+diff --git a/bot/strategy.py b/bot/strategy.py
+new file mode 100644
+index 0000000..91b59ef
+--- /dev/null
++++ b/bot/strategy.py
+@@ -0,0 +1,179 @@
++"""Runtime CFR blueprint: loads data/blueprint.npz and samples actions from it (Task 19).
++
++File format (written by train/export.py; FORMAT 1). The arrays are those of the trainer
++(train/mccfr.py, Layout), not regrouped per street:
++- probs: float16 [n_info, 4], the trainer's average strategy normalized over the legal
++  actions, columns in game.Action order, illegal actions exactly 0. Rows are node-major in
++  decision-node id order, so the infoset (node, bucket) is row offset[node] + bucket, and
++  offset = concatenate([0], cumsum(buckets[tree.street])) is recomputed at load from the
++  per-street bucket counts and the tree (the trainer's streets interleave along node ids,
++  hence no per-street slicing). An infoset the trainer never updated holds the uniform
++  distribution over the legal actions.
++- scalars: format, stack, sb, bb, cap, iterations, seed, linear, n_dec, n_term,
++  tree_child_sha256, buckets_sha256, features_sha256, buckets (the four per-street counts),
++  dataset_* (the T17 dataset's identity).
++
++Blueprint.load() verifies the file against the runtime: format, game constants, the tree
++(n_dec, n_term, sha256 of child.tobytes()), the sha256 of data/buckets.npz and its bucket
++counts, and the array shape. Any mismatch is a ValueError (a refit or a tree change
++invalidates the blueprint). Blueprint.try_load() / load_default() never raise: they return
++None, which the caller treats as "no blueprint" (heuristic only).
++
++Everything here is read-only: the table is non-writeable, meta is a mappingproxy, and there
++is no module-level mutable state. stdlib + numpy only.
++"""
++
++from __future__ import annotations
++
++import hashlib
++from pathlib import Path
++from types import MappingProxyType
++
++import numpy as np
++
++import game
++from bot import abstraction as ab
++from bot.tree import BettingTree, get_tree
++
++FORMAT = 1
++DEFAULT_PATH = Path(__file__).resolve().parent.parent / "data" / "blueprint.npz"
++_DEFAULT_BUCKETS = object()        # sentinel: verify against data/buckets.npz
++_INT = ("format", "stack", "sb", "bb", "cap", "iterations", "seed", "n_dec", "n_term")
++_STR = ("tree_child_sha256", "buckets_sha256", "features_sha256")
++
++
++def tree_sha256(tree: BettingTree) -> str:
++    return hashlib.sha256(np.ascontiguousarray(tree.child).tobytes()).hexdigest()
++
++
++def _constants() -> dict:
++    return {"stack": game.STARTING_STACK, "sb": game.SMALL_BLIND, "bb": game.BIG_BLIND,
++            "cap": game.RAISE_CAP_PER_STREET}
++
++
++class Blueprint:
++    """A loaded blueprint. `meta` (read-only mapping) has stack, sb, bb, cap, buckets (counts
++    per street), iterations, and the identity fields listed in the module docstring."""
++
++    __slots__ = ("meta", "table", "offset", "_child")
++
++    def __init__(self, meta, table: np.ndarray, offset: np.ndarray, child: np.ndarray):
++        self.meta = MappingProxyType(dict(meta))
++        self.table, self.offset, self._child = table, offset, child
++        for a in (table, offset):
++            a.flags.writeable = False
++
++    # ---- loading
++
++    @classmethod
++    def load(cls, path, *, tree: BettingTree | None = None, buckets_path=_DEFAULT_BUCKETS) -> Blueprint:
++        """Load and verify. ValueError on a missing, corrupt or mismatching file.
++        buckets_path: the bucket table to check against (default data/buckets.npz;
++        None skips the table check, for synthetic test blueprints)."""
++        try:
++            return cls._load(path, tree, buckets_path)
++        except ValueError:
++            raise
++        except Exception as e:                      # OSError, BadZipFile, KeyError, EOFError, ...
++            raise ValueError(f"{path}: cannot read blueprint ({type(e).__name__}: {e})") from None
++
++    @classmethod
++    def try_load(cls, path=DEFAULT_PATH, **kw) -> Blueprint | None:
++        """load(), but None instead of any exception."""
++        try:
++            return cls.load(path, **kw)
++        except Exception:
++            return None
++
++    @classmethod
++    def _load(cls, path, tree, buckets_path) -> Blueprint:
++        with np.load(path, allow_pickle=False) as z:
++            meta = {k: int(z[k]) for k in _INT} | {k: str(z[k]) for k in _STR}
++            meta["linear"] = bool(z["linear"])
++            meta["buckets"] = tuple(int(x) for x in z["buckets"])
++            for k in z.files:
++                if k.startswith("dataset_"):
++                    meta[k] = z[k].item()
++            table = z["probs"]
++        if meta["format"] != FORMAT:
++            raise ValueError(f"{path}: blueprint format {meta['format']}, this code reads {FORMAT}")
++        tree = get_tree() if tree is None else tree
++        for k, want in (*_constants().items(), ("n_dec", tree.n_dec), ("n_term", tree.n_term),
++                        ("tree_child_sha256", tree_sha256(tree))):
++            if meta[k] != want:
++                raise ValueError(f"{path}: built for another tree or rules: {k} {meta[k]!r}, "
++                                 f"the runtime has {want!r}")
++        if buckets_path is not None:
++            p = ab.DEFAULT_PATH if buckets_path is _DEFAULT_BUCKETS else Path(buckets_path)
++            have = tuple(ab.NUM_BUCKETS[s] for s in game.Street) if p == ab.DEFAULT_PATH else None
++            sha = hashlib.sha256(Path(p).read_bytes()).hexdigest()
++            if meta["buckets_sha256"] != sha:
++                raise ValueError(f"{path}: built with another bucket table (sha256 "
++                                 f"{meta['buckets_sha256'][:12]}, {p} is {sha[:12]})")
++            if have is not None and meta["buckets"] != have:
++                raise ValueError(f"{path}: bucket counts {meta['buckets']}, the runtime has {have}")
++        counts = np.asarray(meta["buckets"], dtype=np.int64)
++        if counts.shape != (4,) or counts.min() < 1:
++            raise ValueError(f"{path}: bad bucket counts {meta['buckets']}")
++        offset = np.concatenate([[0], np.cumsum(counts[tree.street.astype(np.int64)])]).astype(np.int64)
++        if table.dtype != np.float16 or table.shape != (int(offset[-1]), 4):
++            raise ValueError(f"{path}: probs is {table.dtype} {table.shape}, "
++                             f"expected float16 {(int(offset[-1]), 4)}")
++        return cls(meta, table, offset, tree.child)
++
++    # ---- queries
++
++    def probs(self, node: int, bucket: int) -> np.ndarray:
++        """float64 [4] over game.Action: the blueprint's distribution at (decision node, the
++        actor's bucket on that street), summing to 1, exactly 0 on illegal actions.
++        IndexError on a node or bucket outside the tree."""
++        node, bucket = int(node), int(bucket)
++        lo = self.offset[node]
++        if node < 0 or bucket < 0 or lo + bucket >= self.offset[node + 1]:
++            raise IndexError(f"no infoset for node {node}, bucket {bucket}")
++        p = self.table[lo + bucket].astype(np.float64)
++        s = p.sum()
++        if s <= 0.0:                       # cannot happen in an exported file; stay legal anyway
++            p = (self._child[node] != -1).astype(np.float64)
++            s = p.sum()
++        return p / s
++
++    def act(self, node: int, bucket: int, legal, rng, purify: float = 0.1) -> game.Action:
++        """Sample a legal action. The distribution is masked to `legal` and renormalized;
++        probabilities below `purify` (I9) are zeroed and it is renormalized again. If nothing
++        is left, the most probable legal action. rng: anything with .random() (numpy
++        Generator, random.Random). Always returns a member of `legal`."""
++        legal = tuple(legal)
++        if not legal:
++            raise ValueError("no legal actions")
++        p = self.probs(node, bucket)
++        q = np.zeros(4)
++        idx = [int(a) for a in legal]
++        q[idx] = p[idx]
++        best = max(legal, key=lambda a: q[int(a)])          # most probable legal (first on ties)
++        total = q.sum()
++        if total <= 0.0:
++            return best
++        q /= total
++        if purify > 0.0:
++            q[q < purify] = 0.0
++            total = q.sum()
++            if total <= 0.0:
++                return best
++            q /= total
++        u = rng.random()
++        acc = 0.0
++        pick = None
++        for a in legal:
++            w = q[int(a)]
++            if w > 0.0:
++                acc += w
++                pick = a
++                if u < acc:
++                    return a
++        return pick if pick is not None else best        # u rounded past the last cumulative
++
++
++def load_default(path=DEFAULT_PATH, **kw) -> Blueprint | None:
++    """The shipped blueprint, or None if it is missing, corrupt or stale. Never raises."""
++    return Blueprint.try_load(path, **kw)
+diff --git a/tests/test_strategy.py b/tests/test_strategy.py
+new file mode 100644
+index 0000000..78d2678
+--- /dev/null
++++ b/tests/test_strategy.py
+@@ -0,0 +1,167 @@
++"""Blueprint export (train/export.py) and the runtime sampler (bot/strategy.py)."""
++
++import random
++import shutil
++import time
++from pathlib import Path
++
++import numpy as np
++import pytest
++
++from bot import strategy
++from bot.strategy import Blueprint
++from bot.tree import get_tree
++from game import Action
++from tests.test_mccfr import class_game
++from train import export, mccfr
++
++F, C, H, P = Action
++
++
++@pytest.fixture(scope="module")
++def tree():
++    return get_tree()
++
++
++@pytest.fixture(scope="module")
++def ckpt(tree, tmp_path_factory):
++    d = tmp_path_factory.mktemp("bp")
++    deals = class_game(d / "deals", n=2000)
++    out = d / "raw.npz"
++    mccfr.train(tree, deals, 20000, str(out), 0, threads=1, buckets_table=None, log_every=1e9,
++                count_visits=True, eval_rows=0)
++    return out
++
++
++@pytest.fixture(scope="module")
++def bp_path(tree, ckpt, tmp_path_factory):
++    out = tmp_path_factory.mktemp("exp") / "blueprint.npz"
++    export.export(ckpt, out, tree=tree, buckets_table=None)
++    return out
++
++
++@pytest.fixture(scope="module")
++def bp(tree, bp_path):
++    return Blueprint.load(bp_path, tree=tree, buckets_path=None)
++
++
++def test_load_under_1s_and_meta_present(tree, bp_path):
++    t0 = time.perf_counter()
++    bp = Blueprint.load(bp_path, tree=tree, buckets_path=None)
++    assert time.perf_counter() - t0 < 1.0
++    m = bp.meta
++    assert (m["stack"], m["sb"], m["bb"], m["cap"]) == (80, 1, 2, 4)
++    assert m["buckets"] == (3, 3, 3, 3) and m["iterations"] == 20000
++    assert m["n_dec"] == tree.n_dec and m["n_term"] == tree.n_term
++    assert len(m["tree_child_sha256"]) == 64 and "seed" in m and "linear" in m
++
++
++def test_export_matches_the_average_strategy_per_street(tree, ckpt, bp):
++    ck = mccfr.load_checkpoint(ckpt, tree, None)
++    strat = mccfr.average_strategy(ck.avg, tree, ck.offset)
++    for s in range(4):
++        rows = mccfr.street_rows(tree, ck.offset, s)
++        got = np.stack([bp.probs(int(n), b) for n in np.flatnonzero(tree.street == s) for b in range(3)])
++        assert np.abs(got - strat[rows]).max() < 2e-3          # float16 rounding
++    for n in (0, 5, 100, 5000):
++        for b in range(3):
++            p = bp.probs(n, b)
++            assert p.shape == (4,) and abs(p.sum() - 1) < 1e-9
++            assert (p[tree.child[n] == -1] == 0).all()
++
++
++def test_arrays_are_read_only(bp):
++    assert not bp.table.flags.writeable
++    with pytest.raises(TypeError):
++        bp.meta["stack"] = 1
++
++
++def test_act_always_legal_even_if_all_mass_illegal(tree, bp):
++    rng = random.Random(1)
++    for n in range(0, tree.n_dec, 97):
++        legal = tree.legal[n]
++        for b in range(3):
++            assert bp.act(n, b, legal, rng) in legal
++    # a node where the blueprint is certain of FOLD/raise but only CHECK_CALL is offered
++    n = next(n for n in range(tree.n_dec) if bp.probs(n, 0)[C] == 0.0 and tree.child[n, C] != -1)
++    assert bp.act(n, 0, (C,), rng) == C
++    # no legal action carries any mass: still a legal action
++    n = next(n for n in range(tree.n_dec) if tree.child[n, F] == -1)
++    assert bp.act(n, 0, (F,), rng, purify=0.0) == F
++    assert bp.act(n, 0, (F, H), rng, purify=0.9) in (F, H)
++    with pytest.raises(ValueError):
++        bp.act(0, 0, (), rng)
++
++
++def test_purify_zero_equals_raw_sampling_distribution(tree, bp):
++    # a node/bucket with a mixed strategy
++    n, b = next((n, b) for n in range(tree.n_dec) for b in range(3)
++                if (bp.probs(n, b) > 0.15).sum() >= 3)
++    legal = tree.legal[n]
++    p = bp.probs(n, b)[list(legal)]
++    p = p / p.sum()
++    rng = np.random.default_rng(7)
++    draws = np.bincount([int(bp.act(n, b, legal, rng, purify=0.0)) for _ in range(10000)], minlength=4)
++    exp = np.zeros(4)
++    exp[list(legal)] = p * 10000
++    keep = exp > 0
++    chi2 = (((draws - exp)[keep]) ** 2 / exp[keep]).sum()
++    assert chi2 < {1: 10.8, 2: 13.8, 3: 16.3}.get(int(keep.sum()) - 1, 20.0)   # p = 0.001 critical values
++    assert (draws[~keep] == 0).all()
++
++
++def test_purify_drops_small_probabilities(tree, bp):
++    n, b = next((n, b) for n in range(tree.n_dec) for b in range(3)
++                if 0 < bp.probs(n, b)[list(tree.legal[n])].min() < 0.05 and len(tree.legal[n]) > 2)
++    legal = tree.legal[n]
++    small = [a for a in legal if bp.probs(n, b)[a] < 0.1]
++    rng = random.Random(3)
++    got = {bp.act(n, b, legal, rng, purify=0.1) for _ in range(2000)}
++    assert got and not got & set(small)
++
++
++def test_load_refuses_a_changed_tree_or_table(tree, ckpt, bp_path, tmp_path):
++    with pytest.raises(ValueError):
++        Blueprint.load(bp_path, tree=tree)                      # data/buckets.npz is not the synthetic table
++    assert Blueprint.try_load(bp_path, tree=tree) is None
++    z = dict(np.load(bp_path))
++    z["tree_child_sha256"] = np.array("0" * 64)
++    bad = tmp_path / "bad.npz"
++    np.savez(bad, **z)
++    with pytest.raises(ValueError):
++        Blueprint.load(bad, tree=tree, buckets_path=None)
++    z = dict(np.load(bp_path))
++    z["stack"] = np.int64(100)
++    np.savez(bad, **z)
++    with pytest.raises(ValueError):
++        Blueprint.load(bad, tree=tree, buckets_path=None)
++
++
++def test_missing_or_corrupt_file_never_raises_from_try_load(tree, bp_path, tmp_path):
++    assert Blueprint.try_load(tmp_path / "nope.npz", tree=tree, buckets_path=None) is None
++    junk = tmp_path / "junk.npz"
++    junk.write_bytes(b"not a zip")
++    assert Blueprint.try_load(junk, tree=tree, buckets_path=None) is None
++    trunc = tmp_path / "trunc.npz"
++    trunc.write_bytes(Path(bp_path).read_bytes()[:5000])
++    assert Blueprint.try_load(trunc, tree=tree, buckets_path=None) is None
++    with pytest.raises(ValueError):
++        Blueprint.load(junk, tree=tree, buckets_path=None)
++    assert strategy.load_default(tmp_path / "nope.npz") is None   # never raises
++
++
++def test_probs_is_cheap(tree, bp):
++    rng = np.random.default_rng(0)
++    nodes = rng.integers(0, tree.n_dec, 2000)
++    ts = []
++    for n in nodes:
++        t0 = time.perf_counter()
++        bp.probs(int(n), 1)
++        ts.append(time.perf_counter() - t0)
++    assert np.percentile(ts, 99) < 50e-6
++
++
++def test_export_refuses_a_checkpoint_from_another_table(tree, ckpt, tmp_path):
++    with pytest.raises(ValueError):
++        export.export(ckpt, tmp_path / "x.npz", tree=tree)      # real table; checkpoint says "synthetic"
++    assert not (tmp_path / "x.npz").exists()
+diff --git a/train/README.md b/train/README.md
+index 35446db..722defe 100644
+--- a/train/README.md
++++ b/train/README.md
+@@ -249,10 +249,16 @@ The kernel is memory-latency-bound: random reads and writes into 49 MB of arrays
+   - the button folds preflop bucket 0, and raises buckets 150-199 at the root 95-97% of the time;
+   - facing a pot raise, the big blind folds 0 and 50, calls 150, and re-raises 199 94% of the time;
+   - at the checked-down river node, the nut buckets bet and the weak ones check.
+ 
+ ### Checks
+ 
+     python -m pytest -q tests/test_mccfr.py             # engine payoffs, exact best response, convergence, checkpoints
+     python -m pytest -q -m slow tests/test_mccfr.py     # 8-thread convergence, the plan's behaviour tests, SIGTERM + resume
+ 
+ The default tests take about 10 s. The key one trains on a perfect-recall game: three hand classes, the same bucket on every street. On that game the best response is exact. The test asserts that the exploitability falls below a measured threshold, on one thread (falling at every checkpoint) and on two (hogwild). It falls about as 1/sqrt(T): 0.194 bb/hand at 200k iterations, 0.032 at 2M, 0.010 at 20M. Either threading bug the trainer had during development fails the two-thread case (module docstring of `_run_block`).
++
++## Blueprint export (Task 19)
++
++    python -m train.export train_data/mccfr-b400/blueprint_raw.npz data/blueprint.npz
++
++`train/export.py` reads a checkpoint or final output through `mccfr.load_checkpoint` (tree, constants, bucket table and shapes verified), normalizes `avg` over the legal actions and writes it as float16 `[n_info, 4]` in the trainer's own row order (8 bytes per infoset, 51 MB at 400 buckets a street), with the tree/bucket/dataset identity. `bot/strategy.py` (`Blueprint.load`, `.probs(node, bucket)`, `.act(node, bucket, legal, rng, purify=0.1)`) re-verifies all of it against the runtime tree and `data/buckets.npz` and refuses a mismatch; `Blueprint.try_load` / `strategy.load_default` return None instead of raising. The file format is in the `bot/strategy.py` docstring.
+diff --git a/train/export.py b/train/export.py
+new file mode 100644
+index 0000000..ff1358c
+--- /dev/null
++++ b/train/export.py
+@@ -0,0 +1,75 @@
++"""Export a verified MCCFR checkpoint (or final output) to the runtime blueprint (Task 19).
++
++    python -m train.export train_data/mccfr-b400/blueprint_raw.npz data/blueprint.npz
++
++Reads through train.mccfr.load_checkpoint (tree, constants, bucket table, shapes, dtypes all
++verified), takes the average strategy normalized over the legal actions, stores it as float16
++[n_info, 4] in the trainer's own row order (the format is in bot/strategy.py), and writes
++atomically. The result is re-loaded with bot.strategy.Blueprint.load as a check before the
++rename. About 8 bytes per infoset: 51 MB at 400 buckets a street.
++"""
++
++from __future__ import annotations
++
++import argparse
++import os
++from pathlib import Path
++
++import numpy as np
++
++import game
++from bot import abstraction as ab
++from bot import strategy
++from bot.tree import BettingTree, get_tree
++from train import mccfr
++
++
++def export(src, out, *, tree: BettingTree | None = None, buckets_table=ab.DEFAULT_PATH) -> Path:
++    """Write the blueprint for checkpoint `src` to `out`. buckets_table None: synthetic data."""
++    tree = get_tree() if tree is None else tree
++    ck = mccfr.load_checkpoint(src, tree, buckets_table)       # raises ValueError on any mismatch
++    m = ck.meta
++    probs = mccfr.average_strategy(ck.avg, tree, ck.offset)
++    legal = np.repeat(tree.child != -1, np.diff(ck.offset), axis=0)
++    table = probs.astype(np.float16)
++    table[~legal] = 0
++    arrays = {
++        "format": np.int64(strategy.FORMAT), "probs": table,
++        "stack": np.int64(m["starting_stack"]), "sb": np.int64(m["small_blind"]),
++        "bb": np.int64(m["big_blind"]), "cap": np.int64(m["raise_cap"]),
++        "iterations": np.int64(m["iterations"]), "seed": np.int64(m["seed"]),
++        "linear": np.bool_(m["linear"]), "n_dec": np.int64(m["n_dec"]), "n_term": np.int64(m["n_term"]),
++        "tree_child_sha256": np.array(m["tree_child_sha256"]),
++        "buckets_sha256": np.array(m["buckets_sha256"]),
++        "features_sha256": np.array(m["features_sha256"]),
++        "buckets": np.array(m["num_buckets"], dtype=np.int64),
++        "dataset_path": np.array(m["dataset_path"]), "dataset_n": np.int64(m["dataset_n"]),
++        "dataset_seed": np.int64(m["dataset_seed"]),
++        "dataset_shard_size": np.int64(m["dataset_shard_size"]),
++        "dataset_format": np.int64(m["dataset_format"]),
++    }
++    out = Path(out)
++    out.parent.mkdir(parents=True, exist_ok=True)
++    tmp = out.with_name(out.name + ".tmp.npz")
++    try:
++        np.savez(tmp, **arrays)
++        bp = strategy.Blueprint.load(tmp, tree=tree,
++                                     buckets_path=None if buckets_table is None else buckets_table)
++        assert bp.meta["iterations"] == m["iterations"]
++        os.replace(tmp, out)
++    finally:
++        tmp.unlink(missing_ok=True)
++    return out
++
++
++def main(argv=None) -> None:
++    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
++    ap.add_argument("src", help="a checkpoint or final output of train.mccfr")
++    ap.add_argument("out", nargs="?", default=str(strategy.DEFAULT_PATH))
++    a = ap.parse_args(argv)
++    out = export(a.src, a.out)
++    print(f"exported {a.src} -> {out} ({out.stat().st_size / 1e6:.1f} MB)")
++
++
++if __name__ == "__main__":
++    main()

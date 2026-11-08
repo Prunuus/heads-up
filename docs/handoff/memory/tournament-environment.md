@@ -1,23 +1,23 @@
 ---
 name: tournament-environment
-description: "Where and how the tournament actually runs bots (GCP k8s VM, ~96 vCPUs) and the bot changes that implies (ruling R30)"
+description: "Where the tournament runs bots (GCP k8s VM, ~96 shared vCPUs, 1 CPU/bot) and the bot changes that implies (ruling R30)"
 metadata:
   node_type: memory
   type: project
-  originSessionId: b4276c44-89ab-406f-9078-0e01542ecd72
-  modified: 2026-11-07T22:43:44.065Z
+  originSessionId: c0d55f53-d291-4faf-88d2-40523d153176
+  modified: 2026-11-08T00:09:15.487Z
 ---
 
-On 2026-11-07 the organizer said the bots run on a **Kubernetes cluster on a GCP VM with roughly 96 vCPUs** (the organizer was unsure of the exact count). Each bot is a Docker container built from `docker/Dockerfile.agent`. The guide still gives each bot 1 CPU and 4 GB. The 96 vCPUs are shared across many concurrent matches, so a bot does not get more compute.
+**What the organizer said (2026-11-07).** Bots run on a Kubernetes cluster on a GCP VM with roughly 96 vCPUs. Each bot is a Docker container built from `docker/Dockerfile.agent`, with 1 CPU and 4 GB per bot.
 
-**Why it matters:** one GCP vCPU is a hyperthread, so a contended VM likely runs our single-threaded bot 1.5–3× slower than the dev Mac's performance cores, with timing jitter from Kubernetes CPU limits. Other teams' bots slow down the same way, so more of them will empty their 8 s time bank mid-half.
+**Why it matters.** A vCPU is a hyperthread, so expect our single-threaded bot to run 1.5–3× slower than on a dev machine, with jitter. Other teams' bots slow down the same way and will empty their 8 s banks more often.
 
 **How to apply (ledger ruling R30):**
-- **Task 11.** Measure a CPU-speed factor at warmup (floor 1.0) and feed it to `bot.timing.grace_for_cpu_factor`. Re-estimate the factor online from measured decision times.
-- **Task 12.** Add a per-bot `time_scale` to `sim.match` and run tuning and evaluation at about 2.5× as the primary condition.
-- **Startup.** Keep it at about 2 s or less on the Mac; the hard limit is 15 s.
-- **Docker check.** `tools/check_build.sh` must run on the user's PC (it has Docker; the Mac doesn't) before any submission.
-- **Training.** No change to the CFR training or blueprint design.
-- **Open questions for the organizer:** the per-container CPU request and limit, the machine type, concurrent matches per VM, and whether the judge and both bots share one pod.
+- **T11:** calibrate a CPU-speed factor at warmup (floor 1.0) and feed it to `bot.timing.grace_for_cpu_factor`. Re-estimate it online during play.
+- **T12:** add a per-bot `time_scale` to the sim, and tune and evaluate at about 2.5×.
+- **Startup:** keep it at about 2 s or less.
+- **Before any submission:** `tools/check_build.sh` must pass, which needs Docker.
+
+**Measured on the PC.** Real uvicorn plumbing is 0.29 ms per request. The in-process TestClient is 1.9 ms per request, so it is not a valid proxy for bank usage (R31).
 
 Related: [[plo5-bot-sdd-execution]], [[training-hardware]].

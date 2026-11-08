@@ -1,126 +1,113 @@
-# Handoff: PLO5 poker bot, moving from the Mac to the PC
+# Handoff: PLO5 bot, moving from the PC back to the Mac (2026-11-08 morning)
 
-This is a snapshot taken on 2026-11-07 (CST). **The submission deadline is 2026-11-08 at 12:00.**
+The bot is **finished, verified and pushed**. Deadline: **2026-11-08 12:00 CST**.
 
-This folder carries everything a fresh Claude Code session on another machine needs to continue the work exactly where it stopped:
-- the plan
-- the progress ledger
-- every task report
-- the controller's rulings
-- the memory notes
+## 1. What to submit
 
-## 1. What this project is
-- **The challenge.** We are writing a bot for the TAMU Datathon heads-up Short Deck 5-card Pot-Limit Omaha bot challenge. `README.md` in the repo root is the organizer's README.
-- **The plan.** `docs/superpowers/plans/2026-11-07-plo5-poker-bot.md` holds the research, the strategy and 24 tasks. Part A explains why the plan looks the way it does; Part B is the tasks.
-- **How the plan is run.** The plan is executed with the **superpowers:subagent-driven-development** skill. A controller session sends each task to a fresh implementer subagent, then a reviewer, then a fix loop, and records everything in a ledger.
+| Field | Value |
+|---|---|
+| Form | https://forms.gle/a6Nr9VxXD9RYvi9x7 (the latest guide; the old form link is dead) |
+| Team | `3XKO` (must match the registration exactly) |
+| Repo | `https://github.com/Prunuus/heads-up` (public; no branch in the URL) |
+| Commit SHA | **`c1ded1661937b4ffce15d875e65b3f0ccaff89a4`** (branch `kevin`) |
 
-## 2. State at the snapshot
+The tournament builds exactly that commit. A failed build keeps your previous working bot, and the latest successful build is the one that plays.
 
-Branches live on `origin` (github.com/Prunuus/heads-up). Each branch was worked in its own worktree on the Mac:
+Earlier fallbacks, all on GitHub:
+- v2 `2115725fd2a0f9fac4f0dab081ae84c7a60f93b7`
+- failsafe `ff537d2a13dd0927508de34fe61b8e79d070b572` (already submitted)
 
-| Branch | Purpose | Contents |
+## 2. What the bot is (v3.1)
+
+- **CFR blueprint.** External-sampling MCCFR with Linear CFR weighting, run for 16.2 billion iterations. It uses 400 card buckets per street over the exact betting tree (15,952 decision nodes, 6.38M infosets). The export is `data/blueprint.npz` (51 MB, float16 average strategy).
+- **Layers.** The blueprint is the base for every opponent. The base switches to the heuristic (v2's base) only against passive-preflop opponents: raise rate ≤ 0.12 after ≥ 60 hands, back at ≥ 0.20. The exploit layer (opponent-model detectors) sits on top.
+- **Fallbacks.** On a node miss, a config mismatch, a missing or corrupt blueprint, or any exception, the bot falls back to the heuristic, and then to a guaranteed-legal action.
+- **Startup.** Everything loads in `warmup()`: the tree, the buckets and the blueprint, with hash checks. The upstream organizer repo was checked at 08:05: `game.py`, the judge and the Dockerfiles are byte-identical to ours, so nothing was retuned.
+
+## 3. Results (all reproducible; numbers in `sdd-workspace/progress.md`)
+
+- **Real judge, in the tournament container.** `docker/Dockerfile.agent`, `--cpus 1`, read-only, no capabilities, a fresh process every half.
+  - 12 matches: **11 wins, 1 chop** against the 4 baselines (+5.1 to +8.1 bb/deal), llm_aggressive (+3.7) and llm_mc_equity (+1.5 / +0.6 chop).
+  - 0 errors, 0 forfeits, time bank at most **1.9 s** per half (8 s allowed).
+- **vs 6 strong competitor-style bots** (built by top-tier agents as rival teams; `sim/opponents/field*`), 5 seeds each:
+  - v3.1: **6 wins, 0 losses, 24 chops**.
+  - v2: 0 wins, 19 losses.
+- **v3.1 vs v2 head-to-head:** +0.54 bb/deal [+0.24, +0.84].
+- **Held-out and train zoo bots:** about equal to v2 (TRAIN +0.09, not significant).
+- **Exploitability (LBR probe).** v2 is beaten by **+3.68** bb/deal. The v3 estimate is **inconclusive**: the probe's model check failed (3.1% of actions unpredicted), so it is not claimed.
+- **Checks on c1ded16:**
+  - 669 tests pass;
+  - `tools/check_build.sh` ALL CHECKS PASSED (startup 1.8 s, +21 MB image);
+  - the final Opus review says **ready to ship** with no fixes.
+
+## 4. Verify it yourself on the Mac: the tournament-like Docker run
+
+Requirements: Docker Desktop running, and the repo on branch `kevin` at the SHA above.
+
+```bash
+git fetch origin && git checkout kevin && git pull     # HEAD must be c1ded16...
+git ls-tree -l HEAD data/blueprint.npz                 # must show ~51052391 bytes: the trained weights are in the commit
+```
+
+**Step 1: the organizer's own check.** It builds the tournament base image and our image, checks the size cap, then starts the bot like a match: no network, read-only files except /tmp, 1 CPU, 4 GB, non-root. It then runs the smoke test.
+
+```bash
+./tools/check_build.sh                       # expect: ALL CHECKS PASSED
+PLATFORM=linux/amd64 ./tools/check_build.sh  # optional on Apple Silicon: the tournament's CPU type (emulated, so slow timings are expected)
+```
+
+**Step 2: prove the trained weights load and answer inside that image.** Run this after step 1, which tags the image `poker-agent-check:latest`:
+
+```bash
+docker run --rm --network none --read-only --tmpfs /tmp:rw,size=512m --cap-drop ALL \
+  --security-opt no-new-privileges --cpus 1 --memory 4g -e PYTHONPATH=/app \
+  -v "$PWD/docs/handoff/verify/bp_probe.py:/probe/bp_probe.py:ro" -w /app \
+  poker-agent-check:latest python /probe/bp_probe.py
+# expect: blueprint loaded: True | iterations: 16221206540
+#         layers: {'blueprint': 132, 'heuristic': 0, 'node_miss': 0} | faults: all 0
+```
+
+If it ever says `blueprint loaded: False` or shows `heuristic` answers against this random opponent, the weights are not being used. Check `git ls-tree` above and that `data/` is not in `.dockerignore`.
+
+**Step 3: real judge vs real opponent servers, halves separate, fresh processes.**
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt   # once
+bash docs/handoff/verify/realjudge.sh /tmp/realjudge    # ~5 min; prints per-half errors/bank and each match verdict
+```
+
+Expect 0 errors, `forfeited False`, bank well under 3 s per half, and AGENT1 WINS against the baselines.
+
+**Optional: strength vs the 6 competitor bots** (CPU-heavy, about 10–30 min):
+
+```bash
+.venv/bin/python docs/handoff/verify/strong_eval.py
+```
+
+## 5. Where everything is
+
+| Thing | Location | In git? |
 |---|---|---|
-| `kevin` | **Track A**: heuristic bot (v1/v2) | Tasks 1–9 done and reviewed, plus the audit fixes (I1–I6). **Task 10** (features and heuristic) was in progress. |
-| `kevin-cfr` | **Track B**: CFR pipeline (v3) | Task 15 (betting tree) done and reviewed, and `kevin` merged in at `66a3d73`. **Task 16** (card buckets) was in progress. |
-| `kevin-opp` | **Track C**: opponent model | Forked from `kevin@66a3d73`. **Task 13** (opponent model) was in progress. |
-| `kevin-handoff` | this handoff | `docs/handoff/` only, on top of `kevin` |
+| Submission code | branch `kevin` (`agent.py`, `bot/`, `data/`) | yes |
+| This handoff | branch `kevin-handoff`, `docs/handoff/` | yes |
+| SDD ledger, briefs, reports, review packages | `docs/handoff/sdd-workspace/` (copy of the PC's `.superpowers/sdd/2026-11-07-plo5-poker-bot/`) | yes, here |
+| Claude memory notes | `docs/handoff/memory/` | yes, here |
+| Verify scripts | `docs/handoff/verify/` | yes, here |
+| Competitor bots (FIELD, FIELD2) | `sim/opponents/field/`, `sim/opponents/field2/` (originals in the PC's `~/code/competitor-bots/`) | yes |
+| Training data (10M deals) and MCCFR checkpoints | PC only: `~/code/heads-up-bundle-cfr/train_data/` (d10m-b400, about 1.3 GB; checkpoints 357 MB each) | no; not needed to run or submit |
+| Trainer and runbook | `train/mccfr.py`, `train/README.md` | yes |
 
-`licheng` belongs to a teammate. It is not part of this work, so don't touch it.
+## 6. Open items and known limits (none block submission)
 
-**The ledger is the source of truth for progress.** It is `sdd-workspace/progress.md`. A task is done only if the ledger has a `Task N: complete` line for it. Every `Ruling:` line is a decision the controller made on the user's behalf.
+- **Draws.** Against strong bots most results are chops (CI-based verdicts over 1,000 deals). v3.1 never lost one in 30, but wins only some.
+- **Time bank on a slow host.** Under a 2.5× slow-CPU emulation, the worst half used 3.2–3.75 s (8 s limit). The real container measured ≤ 1.9 s.
+- **Upstream retunes.** If the organizers change `game.py` constants (stack, blinds, raise cap), the bot silently plays heuristic-only, since the blueprint no longer matches. Re-check upstream (https://github.com/tamu-datathon-org/heads-up-bundle) before resubmitting.
+- **Cut.** Tasks 22 and 23 (stretch) were not done, by decision.
 
-### Tasks that were in progress when the snapshot was taken
-For each of Tasks 10, 13 and 16, check the ledger and that branch's git log on the PC:
-- **Ledger says `complete`:** nothing to do.
-- **There are commits and a `task-N-report.md`, but no review yet:** generate the review package and dispatch the task reviewer.
-- **No commits (the agent died mid-task):** re-dispatch an implementer with the same brief, `sdd-workspace/task-N-brief.md`. Point it at the existing report file if there is one, and tell it to resume.
+## 7. Resuming with Claude Code on the Mac
 
-## 3. Setting up the PC
+Paths: the Mac repo is `~/Desktop/code/FALL26/heads-up-bundle`, and the PC repo is `~/code/heads-up-bundle`. Install the superpowers plugin (`/plugin`). Then copy `docs/handoff/memory/*.md` into the Mac's Claude project memory folder, or just have the session read them. Start the new session with:
 
-```bash
-git clone https://github.com/Prunuus/heads-up.git heads-up-bundle
-cd heads-up-bundle
-git fetch --all
-git checkout kevin
-# The worktrees must be SIBLING folders, not inside the repo (ruling R24b: pytest would collect duplicate tests).
-git worktree add ../heads-up-bundle-cfr kevin-cfr
-git worktree add ../heads-up-bundle-opp kevin-opp
+> Read docs/handoff/README.md (branch kevin-handoff), docs/handoff/memory/*.md and docs/handoff/sdd-workspace/progress.md (especially the end). The bot is finished and pushed at c1ded16; help me verify and submit it. Never push or submit without asking me. Commit messages are one simple sentence, no co-author lines.
 
-python3 -m venv .venv            # Python 3.12+; the tournament image runs 3.12
-.venv/bin/pip install -r requirements-dev.txt      # fastapi, uvicorn, pytest, httpx, numpy
-.venv/bin/pip install -r requirements-train.txt    # + numba, for offline training only
-.venv/bin/python -m pytest -q                      # should pass, with a few deselected slow tests
-```
-
-On Windows, use PowerShell with `.venv\Scripts\python`, or use WSL. WSL is recommended, since the organizer's `tools/check_build.sh` needs bash and Docker.
-
-**If the PC has Docker, run `./tools/check_build.sh` there.** The Mac had no Docker, so the tournament-identical image build and smoke test have never been run. This must pass before submission.
-
-### Restoring the ledger so the skill resumes instead of restarting
-The skill keeps its workspace at `<repo>/.superpowers/sdd/2026-11-07-plo5-poker-bot/`. That folder is git-ignored, which is why a copy travels here:
-
-```bash
-mkdir -p .superpowers/sdd/2026-11-07-plo5-poker-bot
-cp docs/handoff/sdd-workspace/* .superpowers/sdd/2026-11-07-plo5-poker-bot/
-```
-
-Paths inside the copied files point at the Mac (`/Users/kchen/Desktop/code/FALL26/...`). Read them as the matching paths on the PC.
-
-### Restoring the memory notes (optional)
-`docs/handoff/memory/` holds the two memory notes plus their index. Either copy them into the PC's Claude Code project memory folder (it is created under `~/.claude/projects/<name derived from the repo path>/memory/` after the first session in this folder), or just have the new session read them.
-
-## 4. Starting the new Claude Code session
-You need Claude Code with the **superpowers** plugin installed, since the skills `subagent-driven-development` and `using-git-worktrees` come from it. Open the repo folder and send:
-
-> Read docs/handoff/README.md, then docs/handoff/memory/*.md, then the ledger at .superpowers/sdd/2026-11-07-plo5-poker-bot/progress.md. Resume executing docs/superpowers/plans/2026-11-07-plo5-poker-bot.md with superpowers:subagent-driven-development on the three tracks, following every ruling in the ledger. Deadline: 2026-11-08 12:00.
-
-## 5. User directives (binding)
-- **Maximum effort.** Implementers, task reviewers and audits run on **opus at effort max**. Scoped re-reviews of small fix diffs (≲300 lines) run on **opus at effort high**. Plumbing tasks (T11, T19, T24) may use opus at high.
-- **Never push or submit without the user's OK.** Commit only on the track branches.
-- **Tasks 22 and 23 are cut** (stretch), to be revisited only if v3 finishes with time to spare. Task 21 (the LBR probe) stays in full.
-- **Training runs on the PC,** which has a high-end CPU and a dedicated GPU.
-  - Task 17 and Task 18 scripts must be portable and scale to every core, with checkpoint/resume and a `train/README.md` runbook (ruling R23).
-  - With a CUDA GPU available, weigh a GPU (full-width, vectorized) CFR trainer against the CPU numba MCCFR plan in Task 18, using measured throughput.
-  - Size the bucket counts (`data/buckets.npz` metadata, R26) and the iteration target to this machine.
-- **The team name is a placeholder.** `agent.py` has `PARTICIPANT = "KChen"` (ruling R1). It must match the registered team name before submission.
-
-## 5b. Decisions made after the first snapshot (also recorded in the ledger)
-- **Tournament hardware (ruling R30).** The organizer says the bots run on a **Kubernetes cluster on a GCP VM with roughly 96 vCPUs**, shared by many concurrent matches. Each bot is still 1 CPU and 4 GB, so it gets no extra compute, and one vCPU is a hyperthread. Assume our bot runs **1.5–3× slower than the Mac**, and that the other teams' bots will empty their time banks more often. What to do:
-  - **T11:** measure a CPU-speed factor at warmup, floored at 1.0, and pass it to `bot.timing.grace_for_cpu_factor`. Re-estimate it online from measured decision times.
-  - **T12:** add a per-bot `time_scale` to `sim.match` and run tuning and evaluation at about **2.5×** as the primary condition.
-  - **Startup:** keep it at about 2 s or less on a fast machine.
-  - **Docker:** `tools/check_build.sh` must pass before any submission.
-  - **Training:** the training and blueprint design are unchanged.
-  - **Still to ask the organizer:** the per-container CPU request and limit, the machine type, how many matches run concurrently per VM, and whether the judge and both bots share a pod.
-- **Task 13 (Track C) rulings.**
-  - The check-folder detector fires on 12 or more consecutive bet-facing folds with no call, bet or raise since that run began. It catches `checkfold_after(50)` at hand 60–61.
-  - **For T14:** detector precedence is check-folder > maniac > station.
-  - **Wiring:** create `OpponentModel(raise_cap=config.raise_cap, big_blind=config.big_blind)` in `new_half`, and call `observe()` first in `choose_action`.
-- **Task 10** got a time box (wrap up by about 17:30). Unmet targets and ideas go to T12.
-- **How the PC is used.** Preferred: this Mac stays the controller (it travels home with its lid closed, and the session resumes afterwards) and drives the PC over SSH on the home network. The fallback is a full session switch using this bundle.
-
-## 6. What comes next, and the timeline
-
-**Track A** (`kevin`):
-1. Finish T10.
-2. T11: layered `PolicyBot` plus agent.py wiring. Read the T9, T15 and audit-fix carry-forward notes in the ledger first.
-3. T12: tuning, which gives **v1**.
-4. Merge `kevin-opp`.
-5. T14: exploits, which gives **v2**.
-6. Run T24 (the release checklist) and the final whole-branch review on v2, so **v2 is submission-ready by about 01:00**. It is the safety net.
-
-**Track B** (`kevin-cfr`):
-1. Finish T16.
-2. T17: dataset.
-3. T18: the trainer, then the **long training run on the PC overnight**.
-4. T19: export.
-
-**Then:**
-1. Merge `kevin-cfr` into `kevin`.
-2. T21: the LBR probe.
-3. T20: the v3 gate. Ship CFR only if it beats v2 by the plan's criteria, around 08:00.
-4. Run T24 and the final review again, around 10:00.
-5. The user submits, before 12:00.
-
-## 7. Submission (the user does this)
-Push the final branch. Run `git rev-parse HEAD` to get the full 40-character SHA, then submit it with the team name and the repo URL through the form linked in the participant guide. The repo must be public. The tournament builds exactly that commit.
+Every decision made on your behalf is a `Ruling:` line in `sdd-workspace/progress.md`. The morning summary lists them with their costs.

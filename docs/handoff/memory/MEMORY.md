@@ -1,3 +1,5 @@
-- [PLO5 bot SDD execution](plo5-bot-sdd-execution.md) — how to resume the subagent-driven plan run (ledger path, branch, env limits, no push)
-- [Training hardware](training-hardware.md) — user has a high-end CPU machine for offline training; make training portable/many-core
-- [Tournament environment](tournament-environment.md) — bots run on a GCP k8s VM (~96 vCPUs shared, 1 CPU/bot); calibrate CPU speed, sim at 2.5× time scale, run check_build on PC
+- [PLO5 bot SDD execution](plo5-bot-sdd-execution.md) — how to resume the 3-track subagent-driven plan run on the PC (ledger path, worktrees, no push, team 3XKO)
+- [Training hardware](training-hardware.md) — the PC: Ryzen 9700X 8C/16T, 15 GB WSL2, no CUDA; CPU pinning split between tracks
+- [Tournament environment](tournament-environment.md) — GCP k8s ~96 shared vCPUs, 1 CPU/bot; calibrate CPU factor, sim at 2.5×, check_build before submit
+- [Commit message style](commit-message-style.md) — one simple sentence, no body, no Claude co-author trailer (user rule, all sessions)
+- [Submission process](submission-process.md) — current form link (forms.gle/a6Nr9VxXD9RYvi9x7), exact fields, failed build keeps the previous bot

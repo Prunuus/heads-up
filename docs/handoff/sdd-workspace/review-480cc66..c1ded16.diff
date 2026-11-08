@@ -1,0 +1,525 @@
+# Review package: 480cc66..c1ded16
+
+## Commits
+c1ded16 Make the auto base the default for PolicyBot after it beat v3 on HOLDOUT and TRAIN.
+e5ab8f2 Add an auto base option to PolicyBot that switches to the heuristic against passive opponents.
+
+## Files changed
+ bot/policy.py                  |  54 +++++++++++++++++++++-
+ sim/gate_v3.py                 |  40 ++++++++++------
+ tests/test_policy_blueprint.py | 102 +++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 179 insertions(+), 17 deletions(-)
+
+## Diff
+diff --git a/bot/policy.py b/bot/policy.py
+index efbffee..61bab79 100644
+--- a/bot/policy.py
++++ b/bot/policy.py
+@@ -88,20 +88,32 @@ from game import (BIG_BLIND, NUM_DEALS, RAISE_CAP_PER_STREET, SMALL_BLIND, START
+ 
+ RNG_SEED = 20261107
+ 
+ # The game a blueprint is trained for (the Task 15 tree uses the default constants).
+ # config_ok compares the half's config with a loaded blueprint's own meta, or with this
+ # when no blueprint is loaded.
+ DEFAULT_META = MappingProxyType({"stack": STARTING_STACK, "sb": SMALL_BLIND,
+                                  "bb": BIG_BLIND, "cap": RAISE_CAP_PER_STREET})
+ _CONFIG_KEYS = (("stack", "starting_stack"), ("sb", "small_blind"), ("bb", "big_blind"),
+                 ("cap", "raise_cap"))
++# The auto base (Task 20b). The blueprint is the default base. Against an opponent that
++# almost never raises preflop (a passive bot) the heuristic base beats it: measured on TRAIN
++# the passive bots (preflop raise rate <= 0.10 after 400 hands) are where v2 > v3, while every
++# FIELD bot raises preflop 0.32-0.60 of the time it can. Enter the heuristic base at a rate
++# <= AUTO_ENTER over >= AUTO_MIN_N raise-legal preflop decisions, return to the blueprint at
++# a rate >= AUTO_EXIT (the band between keeps the current base).
++BASES = ("auto", "blueprint", "heuristic")
++DEFAULT_BASE = "auto"
++AUTO_MIN_N = 60
++AUTO_ENTER = 0.12
++AUTO_EXIT = 0.20
++
+ FAULT_KINDS = ("blueprint", "heuristic", "exploit", "hand_end")
+ LAYER_KEYS = ("blueprint", "heuristic", "node_miss")
+ 
+ # The blueprint layer. BLUEPRINT_PATH is read by warmup; a missing file means no blueprint
+ # (heuristic only), a corrupt or stale one is a failed warmup step. PURIFY: Blueprint.act
+ # zeroes probabilities below this and renormalizes (I9).
+ BLUEPRINT_PATH = strategy.DEFAULT_PATH
+ PURIFY = 0.1
+ _RERUN_MODES = frozenset({"maniac", "station"})   # exploit modes that need Features
+ 
+@@ -217,20 +229,36 @@ def _time_manager(memory) -> TimeManager | None:
+ 
+ 
+ def _opponent(memory) -> OpponentModel | None:
+     try:
+         opp = memory["opp"]
+     except Exception:
+         return None
+     return opp if isinstance(opp, OpponentModel) else None
+ 
+ 
++def select_base(opp, current: str) -> str:
++    """The auto base for the next decision: "blueprint" or "heuristic", from the opponent's
++    preflop raise rate (module constants above) and the current base (hysteresis). Pure and
++    deterministic; any problem with opp means the blueprint."""
++    try:
++        rate, n = opp.raise_rate(Street.PREFLOP)
++        rate, n = float(rate), int(n)
++        if not 0.0 <= rate <= 1.0:
++            return "blueprint"
++        if current == "heuristic":
++            return "blueprint" if rate >= AUTO_EXIT else "heuristic"
++        return "heuristic" if n >= AUTO_MIN_N and rate <= AUTO_ENTER else "blueprint"
++    except Exception:
++        return "blueprint"
++
++
+ def _clamp_factor(f: float) -> float:
+     """f floored at 1.0 and clamped to F_MAX; 1.0 (no adjustment) when f is not a number."""
+     if f != f:
+         return 1.0
+     return min(max(f, 1.0), F_MAX)
+ 
+ 
+ # ------------------------------------------------------------------------- CPU factor
+ 
+ def reference_workload(payload: str, reps: int = REF_REPS) -> None:
+@@ -414,40 +442,47 @@ def warmup() -> None:
+ 
+ 
+ # -------------------------------------------------------------------------- PolicyBot
+ 
+ class PolicyBot:
+     """The shipped bot. BotLike: new_half / choose_action / on_hand_end.
+ 
+     params             heuristic thresholds (default HeuristicParams())
+     use_blueprint      consult the blueprint when one is loaded and the game matches it;
+                        False is v2 (the heuristic base, decision for decision)
++    base               "auto" (default), "blueprint" or "heuristic". Auto plays the blueprint
++                       until the opponent looks passive (select_base), then the heuristic
++                       (Task 20b)
+     use_exploits       run the exploit layer on the base action
+     purify             Blueprint.act's purification threshold (default PURIFY)
+     blueprint_streets  the streets on which the blueprint is consulted (default all)
+     exploit_features   with a blueprint base, compute Features for the maniac/station
+                        re-runs while such a mode is active (False: those modes do not
+                        apply to a blueprint base postflop)
+ 
+     The class itself and functools.partial(PolicyBot, ...) are picklable factories. The
+     instance keeps settings only; everything per half lives in memory.
+     """
+ 
+     def __init__(self, params: HeuristicParams | None = None, use_blueprint: bool = True,
+                  use_exploits: bool = True, purify: float = PURIFY,
+-                 blueprint_streets=tuple(Street), exploit_features: bool = True) -> None:
++                 blueprint_streets=tuple(Street), exploit_features: bool = True,
++                 base: str = DEFAULT_BASE) -> None:
++        if base not in BASES:
++            raise ValueError(f"base must be one of {BASES}, not {base!r}")
+         warmup()                  # once per process (a sim factory call is untimed)
+         w = WARMUP
+         self.params = params if params is not None else HeuristicParams()
+         self.use_blueprint = bool(use_blueprint)
+         self.use_exploits = bool(use_exploits)
+         self.purify = float(purify)
++        self.base = base
+         self.blueprint_streets = frozenset(Street(s) for s in blueprint_streets)
+         self.exploit_features = bool(exploit_features)
+         self.blueprint = w.blueprint if self.use_blueprint and w is not None else None
+         self.tree = w.tree if w is not None else None
+         self.cpu_factor = w.cpu_factor if w is not None else 1.0
+ 
+     def new_half(self, config, memory: dict) -> None:
+         """Fresh per-half state. The same keys every time. Never raises.
+         config.time_scale (a simulator's emulated slow CPU) scales the bot's clock and
+         warmup factor (module docstring)."""
+@@ -469,20 +504,21 @@ class PolicyBot:
+                                        clock=_clock if scale == 1.0 else _ScaledClock(scale),
+                                        grace_s=grace_for_cpu_factor(self.cpu_factor * scale))
+             memory["time_scale"] = scale
+             memory["rng"] = np.random.default_rng(RNG_SEED)
+             memory["opp"] = OpponentModel(raise_cap=cap, big_blind=bb)   # bad values: defaults
+             memory["config_ok"] = config_matches(config, meta)
+             memory["cpu"] = CpuFactorEstimator()
+             memory["faults"] = dict.fromkeys(FAULT_KINDS, 0)
+             memory["exploits"] = dict.fromkeys(exploit.STAT_KEYS, 0)
+             memory["layers"] = dict.fromkeys(LAYER_KEYS, 0)
++            memory["base"] = "blueprint"    # the base in force (auto switches it per half)
+             memory["bucket"] = None         # ((street, hole, board), bucket) of the last lookup
+         except Exception:
+             pass
+ 
+     def choose_action(self, obs, memory: dict) -> Action:
+         """The layered decision (module docstring). Always a legal Action."""
+         tm = _time_manager(memory)
+         if tm is not None:
+             tm.begin()
+         try:
+@@ -513,21 +549,21 @@ class PolicyBot:
+             opp = _opponent(memory)
+             if opp is not None:
+                 opp.observe(obs)            # first: the layers read the updated model
+         except Exception:                   # observe() never raises; belt and braces
+             pass
+         base = feats = None
+         try:
+             config_ok = memory["config_ok"] is True
+         except Exception:
+             config_ok = False
+-        if self.blueprint is not None and config_ok:
++        if self.blueprint is not None and config_ok and self._use_blueprint_now(memory):
+             try:
+                 base = self._blueprint_action(obs, memory)
+                 if base is not None:
+                     if _legal(base, obs):
+                         _count(memory, "blueprint")
+                     else:
+                         _fault(memory, "blueprint")
+                         base = None
+             except Exception:
+                 _fault(memory, "blueprint")
+@@ -550,20 +586,34 @@ class PolicyBot:
+             try:
+                 a = self._exploit_action(base, obs, feats, memory)
+                 if _legal(a, obs):
+                     action = a
+                 else:
+                     _fault(memory, "exploit")
+             except Exception:
+                 _fault(memory, "exploit")
+         return action if _legal(action, obs) else fallback_action(obs)
+ 
++    def _use_blueprint_now(self, memory) -> bool:
++        """Whether the blueprint is the base for this decision: always for base="blueprint",
++        never for "heuristic", and for "auto" what select_base says (memory["base"] holds
++        the base in force). Never raises: a failure means the blueprint."""
++        try:
++            if self.base == "heuristic":
++                return False
++            if self.base == "auto":
++                memory["base"] = select_base(_opponent(memory), memory.get("base"))
++                return memory["base"] == "blueprint"
++        except Exception:
++            pass
++        return True
++
+     def _blueprint_action(self, obs, memory):
+         """node_of -> bucket (cached per street, hole and board) -> Blueprint.act.
+         Returns an Action, or None for no answer (the heuristic then plays): a street
+         outside blueprint_streets, or a node miss. May raise; the caller counts a fault."""
+         street = obs.street
+         if street not in self.blueprint_streets:
+             return None
+         node = node_of(obs, self.tree)
+         if node is None:
+             _count(memory, "node_miss")
+diff --git a/sim/gate_v3.py b/sim/gate_v3.py
+index 3c36000..d34fa4f 100644
+--- a/sim/gate_v3.py
++++ b/sim/gate_v3.py
+@@ -57,20 +57,22 @@ def _policy_bot(**kw):
+     from bot.policy import PolicyBot
+     return PolicyBot(**kw)
+ 
+ 
+ def bot(label: str):
+     """Picklable factory for a gate label: v3, v2, v3_p<purify>, or a tuning variant:
+     v3_post (the blueprint postflop only, the heuristic preflop) or v3_nofeat (no
+     maniac/station re-runs on a blueprint base)."""
+     if label == "v3":
+         return bot_file_factory("agent.py")
++    if label == "v31":
++        return functools.partial(_policy_bot, base="auto")
+     if label == "v2":
+         return functools.partial(_policy_bot, use_blueprint=False)
+     if label == "v3_post":
+         from game import Street
+         return functools.partial(_policy_bot,
+                                  blueprint_streets=(Street.FLOP, Street.TURN, Street.RIVER))
+     if label == "v3_nofeat":
+         return functools.partial(_policy_bot, exploit_features=False)
+     if label.startswith("v3_p"):
+         return functools.partial(_policy_bot, purify=float(label[4:]))
+@@ -138,34 +140,37 @@ def _run(jobs: list, out: Path, workers: int) -> dict:
+             save(*_play(j))
+     elif todo:
+         ctx = multiprocessing.get_context("spawn")
+         with ctx.Pool(min(workers, len(todo))) as pool:
+             for key, rec in pool.imap_unordered(_play, todo, chunksize=1):
+                 save(key, rec)
+     return recs
+ 
+ 
+ def jobs_a(args) -> list:
+-    return [(_key("a", "v3", "v2", s, args.deals, 1.0), "v3", "v2", True, s, args.deals, 1.0)
++    c, o = args.candidate, args.h2h_opponent
++    return [(_key("a", c, o, s, args.deals, 1.0), c, o, True, s, args.deals, 1.0)
+             for s in [f"g3h{i}" for i in range(1, args.h2h_seeds + 1)]]
+ 
+ 
+ def jobs_b(args) -> list:
+     opps = splits()["holdout"] + splits()["field"]
+     seeds = [f"g3f{i}" for i in range(1, args.focus_seeds + 1)]
+     return [(_key("b", who, o, s, args.deals, ts), who, o, False, s, args.deals, ts)
+-            for ts in args.scales for who in ("v3", "v2") for o in opps for s in seeds]
++            for ts in args.scales for who in (args.candidate, "v2") for o in opps for s in seeds]
+ 
+ 
+ def jobs_e(args) -> list:
+     seeds = [f"g3p{i}" for i in range(1, args.sweep_seeds + 1)]
+     labels = ["v2"] + [f"v3_p{p:g}" for p in args.purify] + list(args.extra)
++    if args.candidate != "v3":
++        labels = ["v2", args.candidate]
+     return [(_key("e", who, o, s, args.sweep_deals, 1.0), who, o, False, s, args.sweep_deals, 1.0)
+             for who in labels for o in splits()["train"] for s in seeds]
+ 
+ 
+ def _jsonable(x):
+     """json.dumps default: numpy scalars and arrays as plain numbers and lists."""
+     if isinstance(x, np.generic):
+         return x.item()
+     if isinstance(x, np.ndarray):
+         return x.tolist()
+@@ -249,61 +254,62 @@ def _ci(d) -> str:
+     lo, mean, hi = mean_ci(d)
+     return f"{mean:+.3f} [{lo:+.3f}, {hi:+.3f}]"
+ 
+ 
+ def _pooled(recs) -> np.ndarray:
+     return np.concatenate([np.asarray(r["per_deal_bb"]) for r in recs]) if recs else np.zeros(0)
+ 
+ 
+ def summarize(args, ra: dict, rb: dict, rd: dict, re_: dict) -> list:
+     L = []
++    C = args.candidate
+     if ra:
+         rs = sorted(ra.values(), key=lambda r: r["seed"])
+-        L += ["(a) v3 vs v2 head-to-head, v3's bb/deal (paired duplicate halves)",
++        L += [f"(a) {C} vs {args.h2h_opponent} head-to-head, {C}'s bb/deal (paired duplicate halves)",
+               f"    pooled {len(rs)} seeds x {rs[0]['deals']} deals: {_ci(_pooled(rs))}   "
+               f"verdicts {' '.join(r['verdict'] for r in rs)}",
+               "    per seed: " + "  ".join(f"{r['seed']} {r['mean_bb']:+.2f}" for r in rs), ""]
+     if rb:
+         sp = splits()
+         L += ["(b) expected points vs HOLDOUT / FIELD (opp bank = opponent's max bank per half, s)",
+-              f"    {'scale':>5} {'split':8} {'v3 pts':>7} {'v2 pts':>7} {'v3 bb':>8} {'v2 bb':>8}"
+-              f"   v3 - v2 paired bb/deal [95% CI]"]
++              f"    {'scale':>5} {'split':8} {C + ' pts':>7} {'v2 pts':>7} {C + ' bb':>8} {'v2 bb':>8}"
++              f"   {C} - v2 paired bb/deal [95% CI]"]
+         for ts in args.scales:
+             for split in ("holdout", "field"):
+                 pick = {who: sorted((r for r in rb.values() if r["a"] == who and r["b"] in sp[split]
+                                      and r["time_scale"] == ts), key=lambda r: (r["b"], r["seed"]))
+-                        for who in ("v3", "v2")}
+-                if not pick["v3"] or not pick["v2"]:
++                        for who in (C, "v2")}
++                if not pick[C] or not pick["v2"]:
+                     continue
+                 pts = {w: np.mean([r["points_a"] for r in v]) for w, v in pick.items()}
+                 bb = {w: np.mean([r["mean_bb"] for r in v]) for w, v in pick.items()}
+                 pair = {(r["b"], r["seed"]): r for r in pick["v2"]}
+                 diffs = [np.asarray(r["per_deal_bb"]) - np.asarray(pair[(r["b"], r["seed"])]["per_deal_bb"])
+-                         for r in pick["v3"] if (r["b"], r["seed"]) in pair]
+-                L.append(f"    {ts:5g} {split:8} {pts['v3']:7.3f} {pts['v2']:7.3f} {bb['v3']:+8.3f} "
++                         for r in pick[C] if (r["b"], r["seed"]) in pair]
++                L.append(f"    {ts:5g} {split:8} {pts[C]:7.3f} {pts['v2']:7.3f} {bb[C]:+8.3f} "
+                          f"{bb['v2']:+8.3f}   {_ci(np.concatenate(diffs)) if diffs else 'n/a'}")
+             for o in sp["holdout"] + sp["field"]:
+                 row = []
+-                for who in ("v3", "v2"):
++                for who in (C, "v2"):
+                     rs = [r for r in rb.values() if r["a"] == who and r["b"] == o and r["time_scale"] == ts]
+                     if rs:
+                         row.append(f"{who} {np.mean([r['points_a'] for r in rs]):.2f} pts "
+                                    f"{np.mean([r['mean_bb'] for r in rs]):+6.2f} bb "
+                                    f"(opp bank {max(max(r['bank_b']) for r in rs):.2f})")
+                 if row:
+                     L.append(f"      ts {ts:g} {o:18s} " + " | ".join(row))
+         L.append("")
+     allm = list(ra.values()) + list(rb.values())
+     if allm:
+-        mine = [r for r in allm if r["a"] == "v3"]
+-        v3_err = sum(sum(r["errors_a"]) for r in allm if r["a"] == "v3")
+-        v3_ff = sum(sum(r["forfeit_a"]) for r in allm if r["a"] == "v3")
++        mine = [r for r in allm if r["a"] == C]
++        v3_err = sum(sum(r["errors_a"]) for r in allm if r["a"] == C)
++        v3_ff = sum(sum(r["forfeit_a"]) for r in allm if r["a"] == C)
+         v2_err = sum(sum(r["errors_b"]) for r in ra.values()) + sum(
+             sum(r["errors_a"]) for r in rb.values() if r["a"] == "v2")
+         v3_bank = max(max(r["bank_a"]) for r in mine)
+         v3_call = max(max(r["max_call_a"]) for r in mine)
+         L += ["(c) errors and bank (every match of a and b)",
+               f"    v3: {v3_err} errors, {v3_ff} forfeited halves, max bank per half {v3_bank:.3f} s, "
+               f"longest request {1e3 * v3_call:.1f} ms   |   v2: {v2_err} errors",
+               f"    v3 bank per half by scale: " + "  ".join(
+                   f"ts {ts:g}: {max([max(r['bank_a']) for r in mine if r['time_scale'] == ts] or [0]):.3f} s"
+                   for ts in sorted({r['time_scale'] for r in mine})), ""]
+@@ -313,23 +319,24 @@ def summarize(args, ra: dict, rb: dict, rd: dict, re_: dict) -> list:
+             r = rd.get(who)
+             if r:
+                 flag = "  MODEL CHECK FAILED: " + "; ".join(r["model_problems"]) if r["model_check_failed"] else ""
+                 L.append(f"    LBR({who}) = {r['mean_bb']:+.3f} [{r['ci_low']:+.3f}, {r['ci_high']:+.3f}]"
+                          f"  deals {r['deals']}  {r['ms_per_decision']:.0f} ms/decision{flag}")
+         if "v3" in rd and "v2" in rd and len(rd["v3"]["per_deal_bb"]) == len(rd["v2"]["per_deal_bb"]):
+             d = np.asarray(rd["v3"]["per_deal_bb"]) - np.asarray(rd["v2"]["per_deal_bb"])
+             L.append(f"    LBR(v3) - LBR(v2), paired on common deals: {_ci(d)}")
+         L.append("")
+     if re_:
+-        L.append("(e) purify sweep on TRAIN: v3(purify) - v2, paired bb/deal [95% CI]")
++        L.append(f"(e) {C} on TRAIN (v3: purify sweep): {C} - v2, paired bb/deal [95% CI]")
+         v2 = {(r["b"], r["seed"]): r for r in re_.values() if r["a"] == "v2"}
+-        for lab in [f"v3_p{p:g}" for p in args.purify] + list(args.extra):
++        labs = [f"v3_p{p:g}" for p in args.purify] + list(args.extra)
++        for lab in labs if C == "v3" else [C]:
+             rs = [r for r in re_.values() if r["a"] == lab and (r["b"], r["seed"]) in v2]
+             if rs:
+                 d = np.concatenate([np.asarray(r["per_deal_bb"]) - np.asarray(v2[(r["b"], r["seed"])]["per_deal_bb"])
+                                     for r in rs])
+                 pts = np.mean([r["points_a"] for r in rs])
+                 errs = sum(sum(r["errors_a"]) for r in rs)
+                 L.append(f"    {lab:9s} {_ci(d)}   points {pts:.3f} (v2 "
+                          f"{np.mean([v['points_a'] for v in v2.values()]):.3f})   errors {errs}"
+                          f"   ({len(rs)} matches)")
+         L.append("")
+@@ -376,20 +383,23 @@ def main(argv=None) -> int:
+     ap.add_argument("--scales", type=float, nargs="+", default=[1.0, 2.5])
+     ap.add_argument("--lbr-seeds", type=int, default=16)
+     ap.add_argument("--lbr-deals", type=int, default=250)
+     ap.add_argument("--lbr-particles", type=int, default=2000)
+     ap.add_argument("--lbr-workers", type=int, default=8)
+     ap.add_argument("--sweep-seeds", type=int, default=2)
+     ap.add_argument("--sweep-deals", type=int, default=1000)
+     ap.add_argument("--purify", type=float, nargs="+", default=list(PURIFY_SWEEP))
+     ap.add_argument("--extra", nargs="*", default=[],
+                     help="more section-e variants vs v2 on TRAIN: v3_post, v3_nofeat")
++    ap.add_argument("--candidate", default="v3",
++                    help="the bot under test in the v3 role (a, b, e, c): v3, or v31 (auto base)")
++    ap.add_argument("--h2h-opponent", default="v2", help="section a opponent: v2 or v3")
+     ap.add_argument("--summary-only", action="store_true")
+     ap.add_argument("--allow-no-blueprint", action="store_true",
+                     help="run sections a, b, d, e although no blueprint loads (v3 would equal v2)")
+     args = ap.parse_args(argv)
+     if args.cpus:
+         os.sched_setaffinity(0, _cpus(args.cpus))
+     out = Path(args.out)
+     if not out.is_absolute():
+         out = REPO_ROOT / out
+     out.mkdir(parents=True, exist_ok=True)
+diff --git a/tests/test_policy_blueprint.py b/tests/test_policy_blueprint.py
+index a51fec4..9416b20 100644
+--- a/tests/test_policy_blueprint.py
++++ b/tests/test_policy_blueprint.py
+@@ -302,10 +302,112 @@ def test_warmup_keeps_a_working_blueprint(monkeypatch, max_action_blueprint):
+     bot.choose_action(obs, memory)
+     assert memory["layers"]["blueprint"] == 1
+ 
+ 
+ def test_blueprint_bot_factories_are_picklable():
+     fac = pickle.loads(pickle.dumps(functools.partial(
+         policy.PolicyBot, purify=0.2, blueprint_streets=(Street.RIVER,), exploit_features=False)))
+     bot = fac()
+     assert bot.purify == 0.2 and bot.blueprint_streets == frozenset({Street.RIVER})
+     assert bot.exploit_features is False
++
++
++# ------------------------------------------------------------ the auto base (Task 20b)
++
++class _Opp:
++    """Duck-typed OpponentModel for policy.select_base: only raise_rate(street)."""
++
++    def __init__(self, rate=0.0, n=0):
++        self.rate, self.n = rate, n
++
++    def raise_rate(self, street):
++        return (self.rate, self.n) if int(street) == 0 else (0.5, 999)
++
++
++def test_select_base_defaults_to_the_blueprint_without_evidence():
++    assert policy.select_base(None, "blueprint") == "blueprint"
++    assert policy.select_base(object(), "blueprint") == "blueprint"       # no raise_rate
++    assert policy.select_base(_Opp(0.0, policy.AUTO_MIN_N - 1), "blueprint") == "blueprint"
++    assert policy.select_base(_Opp(float("nan"), 500), "blueprint") == "blueprint"
++
++
++def test_select_base_goes_heuristic_vs_a_passive_opponent():
++    assert policy.select_base(_Opp(0.0, policy.AUTO_MIN_N), "blueprint") == "heuristic"
++    assert policy.select_base(_Opp(policy.AUTO_ENTER, 300), "blueprint") == "heuristic"
++    assert policy.select_base(_Opp(policy.AUTO_ENTER + 0.01, 300), "blueprint") == "blueprint"
++    assert policy.select_base(_Opp(0.4, 300), "blueprint") == "blueprint"
++
++
++def test_select_base_has_hysteresis():
++    mid = (policy.AUTO_ENTER + policy.AUTO_EXIT) / 2
++    assert policy.select_base(_Opp(mid, 300), "heuristic") == "heuristic"   # stays
++    assert policy.select_base(_Opp(mid, 300), "blueprint") == "blueprint"   # stays
++    assert policy.select_base(_Opp(policy.AUTO_EXIT, 300), "heuristic") == "blueprint"
++    assert policy.select_base(_Opp(0.0, 10), "heuristic") == "heuristic"    # no n needed to stay
++
++
++def test_select_base_never_raises():
++    class Bad:
++        def raise_rate(self, street):
++            raise RuntimeError("boom")
++
++    assert policy.select_base(Bad(), "heuristic") == "blueprint"
++    assert policy.select_base(_Opp(0.0, 500), "garbage") == "heuristic"
++
++
++def _passive_model(hands=40):
++    from bot.opponent import OpponentModel
++    opp = OpponentModel()
++    opp._raise_n[0], opp._raise_k[0] = 100, 2
++    return opp
++
++
++def test_auto_bot_switches_the_base_per_half_and_blueprint_is_the_default():
++    obs = _observations("auto-base", 12)
++    bot, memory = _bp_bot(use_exploits=False, base="auto")
++    assert memory["base"] == "blueprint"
++    for o in obs[:4]:
++        assert bot.choose_action(o, memory) == max(o.legal_actions)        # blueprint
++    memory["opp"] = _passive_model()
++    for o in obs[4:]:
++        bot.choose_action(o, memory)
++    assert memory["base"] == "heuristic"
++    assert memory["layers"]["blueprint"] == 4
++    assert memory["layers"]["heuristic"] >= len(obs) - 4
++    assert sum(memory["faults"].values()) == 0
++    bot2, memory2 = _bp_bot(use_exploits=False, base="auto")       # a fresh half starts over
++    assert memory2["base"] == "blueprint"
++
++
++def test_fixed_bases_ignore_the_opponent():
++    obs = _observations("fixed-base", 10)
++    bot, memory = _bp_bot(use_exploits=False, base="blueprint")
++    memory["opp"] = _passive_model()
++    for o in obs:
++        assert bot.choose_action(o, memory) == max(o.legal_actions)
++    assert memory["layers"]["heuristic"] == 0
++    bot, memory = _bp_bot(use_exploits=False, base="heuristic")
++    for o in obs:
++        bot.choose_action(o, memory)
++    assert memory["layers"]["blueprint"] == 0
++    with pytest.raises(ValueError):
++        policy.PolicyBot(base="nonsense")
++
++
++def test_a_failing_selector_keeps_the_blueprint(monkeypatch):
++    def boom(*a, **k):
++        raise RuntimeError("selector")
++
++    monkeypatch.setattr(policy, "select_base", boom)
++    bot, memory = _bp_bot(use_exploits=False, base="auto")
++    for o in _observations("auto-fault", 8):
++        assert bot.choose_action(o, memory) == max(o.legal_actions)
++    assert memory["layers"]["heuristic"] == 0
++    assert sum(memory["faults"].values()) == 0
++
++
++def test_the_default_base_is_auto_and_starts_on_the_blueprint():
++    assert policy.DEFAULT_BASE == "auto" and policy.PolicyBot().base == "auto"
++    bot, memory = _bp_bot(use_exploits=False)
++    assert memory["base"] == "blueprint"
++    for o in _observations("default-auto", 6):
++        assert bot.choose_action(o, memory) == max(o.legal_actions)

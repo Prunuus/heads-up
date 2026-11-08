@@ -14,5 +14,5 @@
 - Runtime code (`bot/`, `agent.py`) may import only stdlib, numpy, and the repo's `game.py`/`evaluator.py`. No numba/torch at runtime.
 - Slow tests (≥1 full sim match, tuning, training) are marked `@pytest.mark.slow` (excluded by default via root `pytest.ini`; run with `-m slow`).
 - Factories handed to multiprocessing must be picklable (top-level classes or `functools.partial` of top-level functions — no lambdas).
-- Never `git push`. Commit on the current branch (`kevin`) only.
-- Commit messages end with: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`
+- Never `git push`. Commit on your track branch only (kevin / kevin-cfr / kevin-opp / kevin-lbr).
+- Commit messages: ONE simple sentence (no body, no trailers, never a Co-Authored-By line) — user directive 2026-11-07, overrides the plan's commit wording (ruling R36).
