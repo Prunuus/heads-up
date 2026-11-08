@@ -1,0 +1,243 @@
+{
+  "Id": "837c590eb878defd4c1a6f9da03a3d2bc06e7250665eca83f77b24de9470a947",
+  "Created": "2026-11-08T02:26:35.40340693Z",
+  "Path": "python",
+  "Args": [
+    "-c",
+    "import time; time.sleep(3600)"
+  ],
+  "State": {
+    "Status": "running",
+    "Running": true,
+    "Paused": false,
+    "Restarting": false,
+    "OOMKilled": false,
+    "Dead": false,
+    "Pid": 28754,
+    "ExitCode": 0,
+    "Error": "",
+    "StartedAt": "2026-11-08T02:26:35.495107805Z",
+    "FinishedAt": "0001-01-01T00:00:00Z"
+  },
+  "Image": "sha256:5801b3808288b114c2e88925cda6c88645f1a87d9b754888318ba084613b6a98",
+  "ResolvConfPath": "/var/lib/docker/containers/837c590eb878defd4c1a6f9da03a3d2bc06e7250665eca83f77b24de9470a947/resolv.conf",
+  "HostnamePath": "/var/lib/docker/containers/837c590eb878defd4c1a6f9da03a3d2bc06e7250665eca83f77b24de9470a947/hostname",
+  "HostsPath": "/var/lib/docker/containers/837c590eb878defd4c1a6f9da03a3d2bc06e7250665eca83f77b24de9470a947/hosts",
+  "LogPath": "/var/lib/docker/containers/837c590eb878defd4c1a6f9da03a3d2bc06e7250665eca83f77b24de9470a947/837c590eb878defd4c1a6f9da03a3d2bc06e7250665eca83f77b24de9470a947-json.log",
+  "Name": "/heads-up-history-audit-20261107",
+  "RestartCount": 0,
+  "Driver": "overlayfs",
+  "Platform": "linux",
+  "MountLabel": "",
+  "ProcessLabel": "",
+  "AppArmorProfile": "",
+  "ExecIDs": null,
+  "HostConfig": {
+    "Binds": [
+      "C:\\Users\\liche\\Downloads\\heads-up:/repo:ro"
+    ],
+    "ContainerIDFile": "",
+    "LogConfig": {
+      "Type": "json-file",
+      "Config": {}
+    },
+    "NetworkMode": "none",
+    "PortBindings": {},
+    "RestartPolicy": {
+      "Name": "no",
+      "MaximumRetryCount": 0
+    },
+    "AutoRemove": false,
+    "VolumeDriver": "",
+    "VolumesFrom": null,
+    "ConsoleSize": [
+      0,
+      0
+    ],
+    "CapAdd": null,
+    "CapDrop": [
+      "ALL"
+    ],
+    "CgroupnsMode": "private",
+    "Dns": [],
+    "DnsOptions": [],
+    "DnsSearch": [],
+    "ExtraHosts": null,
+    "GroupAdd": null,
+    "IpcMode": "private",
+    "Cgroup": "",
+    "Links": null,
+    "OomScoreAdj": 0,
+    "PidMode": "",
+    "Privileged": false,
+    "PublishAllPorts": false,
+    "ReadonlyRootfs": true,
+    "SecurityOpt": [
+      "no-new-privileges"
+    ],
+    "Tmpfs": {
+      "/tmp": "rw,nosuid,nodev,size=512m"
+    },
+    "UTSMode": "",
+    "UsernsMode": "",
+    "ShmSize": 67108864,
+    "Runtime": "runc",
+    "Isolation": "",
+    "CpuShares": 0,
+    "Memory": 4294967296,
+    "NanoCpus": 1000000000,
+    "CgroupParent": "",
+    "BlkioWeight": 0,
+    "BlkioWeightDevice": [],
+    "BlkioDeviceReadBps": [],
+    "BlkioDeviceWriteBps": [],
+    "BlkioDeviceReadIOps": [],
+    "BlkioDeviceWriteIOps": [],
+    "CpuPeriod": 0,
+    "CpuQuota": 0,
+    "CpuRealtimePeriod": 0,
+    "CpuRealtimeRuntime": 0,
+    "CpusetCpus": "",
+    "CpusetMems": "",
+    "Devices": [],
+    "DeviceCgroupRules": null,
+    "DeviceRequests": null,
+    "MemoryReservation": 0,
+    "MemorySwap": 8589934592,
+    "MemorySwappiness": null,
+    "OomKillDisable": null,
+    "PidsLimit": 256,
+    "Ulimits": [],
+    "CpuCount": 0,
+    "CpuPercent": 0,
+    "IOMaximumIOps": 0,
+    "IOMaximumBandwidth": 0,
+    "MaskedPaths": [
+      "/proc/asound",
+      "/proc/acpi",
+      "/proc/interrupts",
+      "/proc/kcore",
+      "/proc/keys",
+      "/proc/latency_stats",
+      "/proc/timer_list",
+      "/proc/timer_stats",
+      "/proc/sched_debug",
+      "/proc/scsi",
+      "/sys/firmware",
+      "/sys/devices/virtual/powercap"
+    ],
+    "ReadonlyPaths": [
+      "/proc/bus",
+      "/proc/fs",
+      "/proc/irq",
+      "/proc/sys",
+      "/proc/sysrq-trigger"
+    ]
+  },
+  "GraphDriver": {
+    "Data": null,
+    "Name": "overlayfs"
+  },
+  "Mounts": [
+    {
+      "Type": "bind",
+      "Source": "C:\\Users\\liche\\Downloads\\heads-up",
+      "Destination": "/repo",
+      "Mode": "ro",
+      "RW": false,
+      "Propagation": "rprivate"
+    }
+  ],
+  "Config": {
+    "Hostname": "837c590eb878",
+    "Domainname": "",
+    "User": "10001:10001",
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "AttachStderr": false,
+    "Tty": false,
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Env": [
+      "AGENT_TOKEN=history-check",
+      "PYTHONPATH=/repo",
+      "PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "LANG=C.UTF-8",
+      "GPG_KEY=7169605F62C751356D054A26A821E680E5FA6305",
+      "PYTHON_VERSION=3.12.16",
+      "PYTHON_SHA256=b5796915dc45ff745cfb4e990a7e7c93d6f546328a102ce31448d69ebc37575c",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "PYTHONUNBUFFERED=1",
+      "PIP_DISABLE_PIP_VERSION_CHECK=1",
+      "PIP_ROOT_USER_ACTION=ignore",
+      "HOME=/tmp",
+      "OMP_NUM_THREADS=1",
+      "MKL_NUM_THREADS=1",
+      "OPENBLAS_NUM_THREADS=1",
+      "NUMEXPR_NUM_THREADS=1",
+      "TF_NUM_INTRAOP_THREADS=1",
+      "TF_NUM_INTEROP_THREADS=1",
+      "TF_CPP_MIN_LOG_LEVEL=2",
+      "PORT=5008"
+    ],
+    "Cmd": [
+      "python",
+      "-c",
+      "import time; time.sleep(3600)"
+    ],
+    "Image": "poker-agent-tests:history",
+    "Volumes": null,
+    "WorkingDir": "/tmp",
+    "Entrypoint": null,
+    "OnBuild": null,
+    "Labels": {},
+    "StopTimeout": 1
+  },
+  "NetworkSettings": {
+    "Bridge": "",
+    "SandboxID": "60461a40d8dfae9e547bc563e5ec8c38363f09cd05585c74ad299d3bd468f461",
+    "SandboxKey": "/var/run/docker/netns/60461a40d8df",
+    "Ports": {},
+    "HairpinMode": false,
+    "LinkLocalIPv6Address": "",
+    "LinkLocalIPv6PrefixLen": 0,
+    "SecondaryIPAddresses": null,
+    "SecondaryIPv6Addresses": null,
+    "EndpointID": "",
+    "Gateway": "",
+    "GlobalIPv6Address": "",
+    "GlobalIPv6PrefixLen": 0,
+    "IPAddress": "",
+    "IPPrefixLen": 0,
+    "IPv6Gateway": "",
+    "MacAddress": "",
+    "Networks": {
+      "none": {
+        "IPAMConfig": null,
+        "Links": null,
+        "Aliases": null,
+        "MacAddress": "",
+        "DriverOpts": null,
+        "GwPriority": 0,
+        "NetworkID": "75250a15a16cb574f6c8b44a276698c7352fd87dd9671babf672d383f6b733c9",
+        "EndpointID": "ad4745cc7552da84447614aebcdfe2d67513defdca46cb1e44b2c61c6a8b364a",
+        "Gateway": "",
+        "IPAddress": "",
+        "IPPrefixLen": 0,
+        "IPv6Gateway": "",
+        "GlobalIPv6Address": "",
+        "GlobalIPv6PrefixLen": 0,
+        "DNSNames": null
+      }
+    }
+  },
+  "ImageManifestDescriptor": {
+    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+    "digest": "sha256:0bfbc607e58e493e3090bdf1758a1ff1af3f9729dd0e806ec4e8a4bd1659d444",
+    "size": 3892,
+    "platform": {
+      "architecture": "amd64",
+      "os": "linux"
+    }
+  }
+}

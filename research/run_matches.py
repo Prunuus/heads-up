@@ -27,7 +27,10 @@ from poker_eval import FULL, REDUCED
 OFFICIAL = ('baseline_random', 'baseline_calling_station', 'baseline_always_half', 'baseline_always_pot')
 STRESS = OFFICIAL + ('call_heavy', 'max_raise')
 SEEDS = {'E0': ('stress-41', 'stress-83'), 'dev': ('dev-11', 'dev-29'), 'final': ('final-73', 'final-97')}
-FILES = ('agent.py', 'poker_eval.py', 'poker_memory.py', 'poker_policy.py', 'game.py', 'judge_engine.py', 'evaluator.py', 'requirements.txt')
+FILES = ('agent.py', 'poker_eval.py', 'poker_memory.py', 'poker_policy.py', 'game.py',
+         'judge_engine.py', 'evaluator.py', 'requirements.txt') + tuple(
+             f'baseline-bots/{name}.py' for name in OFFICIAL)
+HARNESS_FILES = ('tools/validate_bot.py', 'research/run_matches.py', 'research/serve_candidate.py')
 
 
 class MeasuredHandle(HttpAgentHandle):
@@ -49,6 +52,19 @@ def latency(values):
             **{f'p{p}_ms': (ordered[min(len(ordered)-1, int(len(ordered)*p/100))] * 1000
                             if ordered else 0)
                for p in (50, 95, 99)}}
+
+
+def runtime_ok(result, measurements, deals):
+    """A qualification needs a working opponent and complete result delivery."""
+    s = result.stats_agent1
+    clean = all(stats.errors == 0 and not stats.forfeited and not stats.timed_out
+                and stats.skipped_calls == 0 and stats.calls > 0
+                for stats in (s, result.stats_agent2))
+    return (clean and result.num_deals == deals
+            and s.time_seconds <= 5.5 and measurements['candidate_latency']['max_ms'] <= 100
+            and measurements['startup_seconds'] <= 12
+            and measurements['memory'].get('internal_errors') == 0
+            and measurements['memory'].get('completed') == deals)
 
 
 def run_half(mode, opponent, seed, half, out, adaptation, bluffs, deals, strategy='v04', keep_logs=False):
@@ -105,11 +121,7 @@ def run_half(mode, opponent, seed, half, out, adaptation, bluffs, deals, strateg
         logfile.close()
     raw['measurement'] = extra
     (out / (name + '.json')).write_text(json.dumps(raw, indent=2), encoding='utf8')
-    s = result.stats_agent1
-    runtime_pass = (s.errors == 0 and not s.forfeited and not s.timed_out
-                    and s.time_seconds <= 5.5 and extra['candidate_latency']['max_ms'] <= 100
-                    and startup <= 12 and extra['memory'].get('internal_errors') == 0)
-    return result, extra, runtime_pass
+    return result, extra, runtime_ok(result, extra, deals)
 
 
 def main():
@@ -148,6 +160,7 @@ def main():
     registry = out / 'registry.json'
     if registry.exists():
         raise RuntimeError('Refusing to overwrite an experiment registry')
+    registry.write_text(json.dumps(manifest, indent=2), encoding='utf8')
     opponents = (args.opponent,) if args.opponent else STRESS if args.stage == 'E0' else OFFICIAL
     for mode in modes:
         for opponent in opponents:
@@ -168,7 +181,8 @@ def main():
                                   'runtime_pass':match['runtime_pass'], 'charged':[h.stats_agent1.time_seconds for h in halves],
                                   'max_ms':[m['candidate_latency']['max_ms'] for m in metrics],
                                   'verdict': match.get('verdict')}), flush=True)
+    return 0 if manifest['matches'] and all(m['runtime_pass'] for m in manifest['matches']) else 1
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

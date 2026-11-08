@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 
 import agent
 from judge_engine import combine_halves
-from research.run_matches import FILES, OFFICIAL, ROOT as EXECUTION_ROOT, run_half
+from research.run_matches import FILES, HARNESS_FILES, OFFICIAL, ROOT as EXECUTION_ROOT, run_half
 
 
 def main():
@@ -29,6 +29,7 @@ def main():
     if args.deals <= 0:
         parser.error('--deals must be positive')
     hashes = {f: sha256((ROOT / f).read_bytes()).hexdigest() for f in FILES}
+    harness_hashes = {f: sha256((ROOT / f).read_bytes()).hexdigest() for f in HARNESS_FILES}
     for name, digest in hashes.items():
         if sha256((EXECUTION_ROOT / name).read_bytes()).hexdigest() != digest:
             raise RuntimeError(
@@ -41,6 +42,7 @@ def main():
         'strategy': agent.STRATEGY, 'mode': agent.EVALUATION_MODE,
         'adaptation': agent.ADAPTATION, 'pure_bluffs': agent.PURE_BLUFFS,
         'source_hashes': hashes,
+        'harness_hashes': harness_hashes,
         'execution_root': str(EXECUTION_ROOT),
         'method': 'official HTTP judge; fresh servers each half', 'matches': [],
     }

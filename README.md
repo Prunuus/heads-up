@@ -4,11 +4,13 @@ Deterministic heads-up short-deck PLO5 bot for the TAMU Datathon challenge.
 Repository work is on **`licheng`**. Participant: `3XKO`; bot: `3XKO`.
 Use your registered team name when submitting.
 
-The current engineering review fixes terminal response attribution, observed-chip
-consistency, and validation server/source selection. Read
-[the current review](reports/audit-followup/REVIEW.md) for defects, verification,
-and limits. The [earlier audit](reports/audit/REVIEW.md) covers the preceding
-transaction, raise, evaluator-input, and HTTP validation fixes.
+The current engineering review reconciles action history with observed chips
+before updating opponent statistics and strengthens match qualification. Read
+[the current review](reports/audit-history/REVIEW.md) for defects, verification,
+and limits. The [preceding review](reports/audit-followup/REVIEW.md) covers
+terminal response attribution and server/source selection; the
+[earlier audit](reports/audit/REVIEW.md) covers transactions, raise guards,
+evaluator inputs, and HTTP validation.
 The strategy remains `v05_limp20`, based on the supplied
 [v0.4 design](design/DESIGN.md). The [v0.5 strategy report](reports/v05/RELEASE.md)
 and [v0.4 report](reports/RELEASE.md) describe historical source revisions;
@@ -50,6 +52,9 @@ baselines, with fresh servers each half, run:
 
 The output directory must be new. This runs four complete duplicate matches and
 records referee errors, internal errors, time banks, latency, and source hashes.
+Qualification requires both bots to finish without errors or skipped decisions
+and all terminal results to reach the candidate. Source checks include the
+baseline opponents; the registry also records validation harness hashes.
 It also works inside a restricted container with the repository mounted read-only.
 Host timings alone do not establish performance under the contest CPU limit.
 
@@ -118,7 +123,7 @@ image with `research/` mounted read-only and output under `/tmp`. E0 uses
 The [historical v0.5 requirements matrix](reports/v05/REQUIREMENTS.md) maps that
 revision to evidence; [v0.4 acceptance evidence](reports/REQUIREMENTS.md) remains
 archived. Current engineering verification is in
-[the latest review](reports/audit-followup/REVIEW.md).
+[the latest review](reports/audit-history/REVIEW.md).
 Raw CSVs, JSON registries, and JUnit output are in `reports/`.
 Thresholds remain provisional hypotheses. The v0.5 comparisons and rejected
 variants are archived under `reports/v05/`; original final seeds were not reused.

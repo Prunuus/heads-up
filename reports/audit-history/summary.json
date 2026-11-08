@@ -1,0 +1,191 @@
+{
+  "tests": {
+    "312": {
+      "tests": 416,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "313": {
+      "tests": 416,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "full_matches": 12,
+  "hands": 24000,
+  "independent_seeds": 3,
+  "wins": 12,
+  "runtime_passes": 12,
+  "referee_errors": 0,
+  "opponent_referee_errors": 0,
+  "internal_errors": 0,
+  "completed_terminal_results": 24000,
+  "forfeits": 0,
+  "time_bank_exhaustions": 0,
+  "skipped_calls": 0,
+  "max_charged_seconds": 0.448367,
+  "max_post_ms": 26.064990990562364,
+  "max_startup_seconds": 1.5163638280064333,
+  "source_hashes_match": true,
+  "harness_hashes_match": true,
+  "qualified_container": {
+    "image": "sha256:5801b3808288b114c2e88925cda6c88645f1a87d9b754888318ba084613b6a98",
+    "user": "10001:10001",
+    "network": "none",
+    "readonly_root": true,
+    "nano_cpus": 1000000000,
+    "memory_bytes": 4294967296,
+    "tmpfs": {
+      "/tmp": "rw,nosuid,nodev,size=512m"
+    },
+    "cap_drop": [
+      "ALL"
+    ],
+    "security_options": [
+      "no-new-privileges"
+    ],
+    "pids_limit": 256,
+    "mounts": [
+      {
+        "destination": "/repo",
+        "writable": false
+      }
+    ]
+  },
+  "matches": [
+    {
+      "match_seed": "history-integrity-a-20261107",
+      "opponent": "baseline_random",
+      "verdict": "AGENT1_WIN",
+      "mean_bb_per_deal": 3.2445,
+      "ci": [
+        2.21284059684617,
+        4.27615940315383
+      ],
+      "runtime_pass": true
+    },
+    {
+      "match_seed": "history-integrity-a-20261107",
+      "opponent": "baseline_calling_station",
+      "verdict": "AGENT1_WIN",
+      "mean_bb_per_deal": 3.3185,
+      "ci": [
+        2.9067719890420283,
+        3.7302280109579713
+      ],
+      "runtime_pass": true
+    },
+    {
+      "match_seed": "history-integrity-a-20261107",
+      "opponent": "baseline_always_half",
+      "verdict": "AGENT1_WIN",
+      "mean_bb_per_deal": 5.3045,
+      "ci": [
+        4.106194701223149,
+        6.502805298776851
+      ],
+      "runtime_pass": true
+    },
+    {
+      "match_seed": "history-integrity-a-20261107",
+      "opponent": "baseline_always_pot",
+      "verdict": "AGENT1_WIN",
+      "mean_bb_per_deal": 3.9185,
+      "ci": [
+        2.2812571046937995,
+        5.5557428953062
+      ],
+      "runtime_pass": true
+    },
+    {
+      "match_seed": "history-integrity-b-20261107",
+      "opponent": "baseline_random",
+      "verdict": "AGENT1_WIN",
+      "mean_bb_per_deal": 2.968,
+      "ci": [
+        1.8261441782259376,
+        4.109855821774063
+      ],
+      "runtime_pass": true
+    },
+    {
+      "match_seed": "history-integrity-b-20261107",
+      "opponent": "baseline_calling_station",
+      "verdict": "AGENT1_WIN",
+      "mean_bb_per_deal": 3.2265,
+      "ci": [
+        2.824520722653747,
+        3.628479277346253
+      ],
+      "runtime_pass": true
+    },
+    {
+      "match_seed": "history-integrity-b-20261107",
+      "opponent": "baseline_always_half",
+      "verdict": "AGENT1_WIN",
+      "mean_bb_per_deal": 2.2925,
+      "ci": [
+        1.104028872571685,
+        3.4809711274283153
+      ],
+      "runtime_pass": true
+    },
+    {
+      "match_seed": "history-integrity-b-20261107",
+      "opponent": "baseline_always_pot",
+      "verdict": "AGENT1_WIN",
+      "mean_bb_per_deal": 1.6855,
+      "ci": [
+        0.031464373104787446,
+        3.3395356268952128
+      ],
+      "runtime_pass": true
+    },
+    {
+      "match_seed": "history-integrity-c-20261107",
+      "opponent": "baseline_random",
+      "verdict": "AGENT1_WIN",
+      "mean_bb_per_deal": 4.931,
+      "ci": [
+        3.8390563733295453,
+        6.022943626670455
+      ],
+      "runtime_pass": true
+    },
+    {
+      "match_seed": "history-integrity-c-20261107",
+      "opponent": "baseline_calling_station",
+      "verdict": "AGENT1_WIN",
+      "mean_bb_per_deal": 3.752,
+      "ci": [
+        3.330528275862012,
+        4.173471724137987
+      ],
+      "runtime_pass": true
+    },
+    {
+      "match_seed": "history-integrity-c-20261107",
+      "opponent": "baseline_always_half",
+      "verdict": "AGENT1_WIN",
+      "mean_bb_per_deal": 5.04,
+      "ci": [
+        3.8932312753009226,
+        6.1867687246990775
+      ],
+      "runtime_pass": true
+    },
+    {
+      "match_seed": "history-integrity-c-20261107",
+      "opponent": "baseline_always_pot",
+      "verdict": "AGENT1_WIN",
+      "mean_bb_per_deal": 5.105,
+      "ci": [
+        3.459783938368748,
+        6.750216061631253
+      ],
+      "runtime_pass": true
+    }
+  ]
+}

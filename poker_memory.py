@@ -55,6 +55,47 @@ def _response_delta(street, fold):
             "pre_folds" if street == Street.PREFLOP else "post_folds": int(fold)}
 
 
+def _check_history_chips(obs, config):
+    """Reconcile the complete visible history with each player's investments.
+
+    Conservation of the combined pot and stacks alone cannot detect chips
+    attributed to the wrong player, fabricated calls, or rewritten wagers.
+    Blinds are implicit; all subsequent contributions must appear in history.
+    """
+    blinds = (config.small_blind, config.big_blind)
+    bets = list(blinds if obs.is_button else reversed(blinds))
+    invested = bets.copy()
+    street, raises = Street.PREFLOP, 0
+    for action in obs.action_history:
+        if action.street != street:
+            bets = [0, 0]
+            street, raises = action.street, 0
+        player = 0 if action.is_me else 1
+        call = max(0, bets[1 - player] - bets[player])
+        remaining = config.starting_stack - invested[player]
+        total = bets[player] + action.amount
+        if action.street_total != total or not 0 <= action.amount <= remaining:
+            raise ValueError("history wager contradicts chip totals")
+        if action.action == Action.CHECK_CALL:
+            if action.amount != min(call, remaining):
+                raise ValueError("history check/call contradicts amount owed")
+        elif action.action in (Action.RAISE_HALF, Action.RAISE_POT):
+            raises += 1
+            if total <= bets[1 - player] or raises > config.raise_cap:
+                raise ValueError("history raise contradicts betting limits")
+        else:
+            raise ValueError("active observation contains a terminal fold")
+        bets[player] = total
+        invested[player] += action.amount
+    if street != obs.street:
+        bets, raises = [0, 0], 0
+    if (bets != [obs.my_bet, obs.opp_bet] or raises != obs.raises_this_street
+            or invested != [config.starting_stack - obs.my_stack,
+                            config.starting_stack - obs.opp_stack]
+            or sum(invested) != obs.pot):
+        raise ValueError("history contradicts observed bets, stacks, or pot")
+
+
 def ingest(obs, memory):
     """Commit observed facts only after validating the entire new context.
 
@@ -97,6 +138,7 @@ def ingest(obs, memory):
                      or (a.street == previous.street and a.is_me == previous.is_me)))):
             raise ValueError("inconsistent history order")
         previous = a
+    _check_history_chips(obs, state["config"])
     pending = state["pending"]
     if pending and len(h) > pending["index"]:
         actual = h[pending["index"]]

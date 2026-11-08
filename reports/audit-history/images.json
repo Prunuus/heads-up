@@ -1,0 +1,22 @@
+[
+  {
+    "id": "sha256:12583d970bcd896c229776bd540fdbb8cc15155286cf850508e7ce08199ce1e1",
+    "tags": [
+      "poker-agent-check:latest"
+    ],
+    "size": 329303303,
+    "user": "10001:10001"
+  },
+  {
+    "id": "sha256:2bc801608d1df109488a2919e51e9ceeb93c103a1f93ef5056c7457bfcb354bf",
+    "tags": [
+      "poker-agent-base:local"
+    ],
+    "size": 329247718,
+    "user": "10001:10001"
+  },
+  {
+    "added_bytes": 55585,
+    "limit_bytes": 3221225472
+  }
+]

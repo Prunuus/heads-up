@@ -1,0 +1,27 @@
+{
+  "official_head": "c83ab6eeb7660a2fd1fae7df224315d41fe985a9",
+  "official_files_unchanged": {
+    "game.py": true,
+    "evaluator.py": true,
+    "judge_engine.py": true,
+    "requirements.txt": true,
+    "test_agent.py": true,
+    "docker/Dockerfile.base": true,
+    "docker/Dockerfile.agent": true,
+    "tools/check_build.sh": true,
+    "tools/smoke_test.py": true
+  },
+  "plumbing_unchanged": true,
+  "design_manifest_all_match": true,
+  "python": "3.13.12 (tags/v3.13.12:1cbe481, Feb  3 2026, 18:22:25) [MSC v.1944 64 bit (AMD64)]",
+  "hashes": {
+    "agent.py": "6d0c53e8a021ece7ce651de0e6d1e0be635af2e762af1a4b3b3c54cb570c2164",
+    "evaluator.py": "e2a151a4c41828a035030f490c91b81015d04bc209abfb860ca3d0dce649e0b4",
+    "game.py": "bc00e3c2d1bf64cbd36bf5553dae218767f11b20f388e5c417d989919877f2db",
+    "judge_engine.py": "fa7a7e3fb49c09588cfcf0930a8e3f6c189e419dbc54263ae7d53b953223d422",
+    "poker_eval.py": "4a24c0c3da53fa5a72c450987691a9fd423ebc73a80cc3f2c56688d9f58b4814",
+    "poker_memory.py": "7ceb49edbe66993827fcd9e25ed2efefbf6d8ce4140ff37650a59a488595f7b8",
+    "poker_policy.py": "22931a69152665fb1978991e751c3ec95e8ef99a6e0d80280008d02ec3cf823d",
+    "test_agent.py": "8bf6041ae67b482fef8b098cbfdf9af8976e68ab9874140cb235e661d0dbf2da"
+  }
+}

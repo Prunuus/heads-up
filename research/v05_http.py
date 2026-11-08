@@ -43,6 +43,7 @@ def main():
           'method':'unchanged official judge, complete HTTP requests, fresh servers each half',
           'matches':[]}
     data['configuration_hash']=sha256(json.dumps({k:data[k] for k in ('strategy','hashes','adaptation','pure_bluffs')},sort_keys=True).encode()).hexdigest()
+    registry_path.write_text(json.dumps(data,indent=2),encoding='utf8')
     for opponent in opponents:
         for seed in seeds:
             halves=[];measurements=[];passed=[]
@@ -57,7 +58,8 @@ def main():
             print(json.dumps({'stage':args.stage,'strategy':args.strategy,'opponent':opponent,'seed':seed,
                               'bb':match['mean_bb_per_deal'],'ci':match['ci'],'verdict':match['verdict'],
                               'runtime_pass':all(passed),'charged':[h.stats_agent1.time_seconds for h in halves]}),flush=True)
+    return 0 if data['matches'] and all(m['runtime_pass'] for m in data['matches']) else 1
 
 
 if __name__=='__main__':
-    main()
+    raise SystemExit(main())

@@ -244,3 +244,48 @@ def test_showdown_pot_cannot_shrink_below_the_observed_pot():
     assert memory["completed"] == 0
     finish(result, memory)
     assert memory["completed"] == 1
+
+
+@pytest.mark.parametrize("change", ["amount", "total", "action", "stacks", "bets", "raises"])
+def test_history_must_account_for_observed_chips_before_committing(change):
+    game = flop()
+    game.apply(Action.RAISE_POT)
+    observation = game.observation(game.to_act)
+    history = observation.action_history
+    if change == "amount":
+        bad = replace(observation, action_history=history[:-1] + (
+            replace(history[-1], amount=history[-1].amount - 1),))
+    elif change == "total":
+        bad = replace(observation, action_history=history[:-1] + (
+            replace(history[-1], street_total=history[-1].street_total + 1),))
+    elif change == "action":
+        bad = replace(observation, action_history=history[:-1] + (
+            replace(history[-1], action=Action.CHECK_CALL),))
+    elif change == "stacks":
+        # Preserve pot + stacks while attributing a chip to the wrong player.
+        bad = replace(observation, my_stack=observation.my_stack - 1,
+                      opp_stack=observation.opp_stack + 1)
+    elif change == "bets":
+        bad = replace(observation, my_bet=1, opp_bet=observation.opp_bet + 1)
+    else:
+        bad = replace(observation, raises_this_street=0)
+    memory = fresh()
+    before = deepcopy(memory)
+    with pytest.raises(ValueError):
+        ingest(bad, memory)
+    assert memory == before
+    ingest(observation, memory)
+    assert memory["post_raises"] == 1
+
+
+def test_retried_observation_cannot_move_chips_without_new_history():
+    game = flop()
+    observation = game.observation(game.to_act)
+    memory = fresh()
+    ingest(observation, memory)
+    before = deepcopy(memory)
+    # This passes the old pot/stack conservation checks.
+    bad = replace(observation, pot=2, my_stack=79, opp_stack=79)
+    with pytest.raises(ValueError):
+        ingest(bad, memory)
+    assert memory == before
