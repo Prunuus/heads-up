@@ -193,12 +193,12 @@ def resolve_bot(spec: str) -> BotFactory:
     raise ValueError(f"cannot resolve bot {spec!r}: not 'agent', a ZOO name or a bot file")
 
 
-OPPONENT_SPLITS = ("train", "holdout", "field", "all")     # "all" includes FIELD
+OPPONENT_SPLITS = ("train", "holdout", "field", "field2", "all")     # "all" includes FIELD, FIELD2
 
 
 def select_opponents(which: str) -> dict:
-    from sim.opponents import FIELD, HOLDOUT, TRAIN, ZOO
-    keep = {"train": TRAIN, "holdout": HOLDOUT, "field": FIELD, "all": set(ZOO)}[which]
+    from sim.opponents import FIELD, FIELD2, HOLDOUT, TRAIN, ZOO
+    keep = {"train": TRAIN, "holdout": HOLDOUT, "field": FIELD, "field2": FIELD2, "all": set(ZOO)}[which]
     return {k: v for k, v in ZOO.items() if k in keep}
 
 

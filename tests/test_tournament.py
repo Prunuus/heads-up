@@ -5,7 +5,7 @@ import pytest
 
 from game import Action
 from sim.match import play_match
-from sim.opponents import FIELD, HOLDOUT, TRAIN, ZOO
+from sim.opponents import FIELD, FIELD2, HOLDOUT, TRAIN, ZOO
 from sim.tournament import (focus_eval, mean_ci, paired_diff, resolve_bot,
                             run_round_robin)
 
@@ -135,7 +135,7 @@ def test_resolve_bot():
     assert callable(resolve_bot("baseline-bots/baseline_random.py"))
     with pytest.raises(ValueError):
         resolve_bot("nonexistent_thing")
-    assert HOLDOUT | TRAIN | FIELD == set(ZOO)
+    assert HOLDOUT | TRAIN | FIELD | FIELD2 == set(ZOO)
 
 
 _SCALES_SEEN = []

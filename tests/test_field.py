@@ -34,14 +34,15 @@ def loaded():
 
 
 @contextlib.contextmanager
-def swallowed_exceptions():
-    """Yields the list of exceptions caught by an except block in a FIELD bot's own code.
+def swallowed_exceptions(bot_dir=FIELD_DIR):
+    """Yields the list of exceptions caught by an except block in a bot's own code (under
+    bot_dir: FIELD's by default).
 
     All three bots catch every exception in choose_action and on_hand_end and play
     check/call-or-fold instead, so a harness incompatibility would still show 0 errors."""
     mon = sys.monitoring
     tool = next(i for i in range(6) if mon.get_tool(i) is None)
-    bot_files = str(FIELD_DIR) + os.sep
+    bot_files = str(bot_dir) + os.sep
     caught = []
 
     def handled(code, offset, exc):

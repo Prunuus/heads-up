@@ -190,7 +190,7 @@ def test_train_opponents_is_the_train_split_or_train_members():
     assert train_opponents(("nit",))["nit"] is ZOO["nit"]      # factories come from ZOO
 
 
-@pytest.mark.parametrize("bad", ["holdout", "all", "field", "zoo", "", [], ["llm_opp_model"],
+@pytest.mark.parametrize("bad", ["holdout", "all", "field", "field2", "zoo", "", [], ["llm_opp_model"],
                                  ["nit", "threshold_cat"], ["agentic_gto"], ["no_such_bot"],
                                  {"nit": ZOO["nit"]}, {"llm_opp_model": ZOO["llm_opp_model"]},
                                  "nit", None, 3])
