@@ -57,6 +57,10 @@ def _expected_fallback(obs):
 
 
 def _fresh_bot(config=None, **kw):
+    """A PolicyBot after new_half. The heuristic-layer tests here pin use_blueprint=False,
+    so they hold whether or not data/blueprint.npz is present (the blueprint layer has its
+    own tests in tests/test_policy_blueprint.py)."""
+    kw.setdefault("use_blueprint", False)
     bot, memory = policy.PolicyBot(**kw), {}
     bot.new_half(config or AgentConfig(), memory)
     return bot, memory
@@ -77,6 +81,7 @@ def test_layer_exception_falls_back_legally(monkeypatch):
         assert a in obs.legal_actions and a == _expected_fallback(obs)
     assert memory["faults"]["heuristic"] == len(obs_all)
     assert memory["tm"]._t0 is None                 # end() ran although the layer raised
+    monkeypatch.setattr(policy, "_DEFAULT_BOT", policy.PolicyBot(use_blueprint=False))
     for obs in obs_all[:20]:                        # the module-level wrapper, same path
         memory = {}
         policy.start_half(AgentConfig(), memory)
@@ -159,6 +164,8 @@ def _assert_clean_half(name, i, deals):
     assert h.calls_a > deals                        # it really played
     (memory,) = memories
     assert sum(memory["faults"].values()) == 0, (name, memory["faults"])
+    if policy.BLUEPRINT_PATH.is_file():             # v3: the blueprint really plays
+        assert memory["layers"]["blueprint"] > 0, (name, memory["layers"])
 
 
 @pytest.mark.slow
@@ -326,7 +333,7 @@ def test_policy_bot_factories_are_picklable():
     p = HeuristicParams(bluff_freq=0.0)
     fac = pickle.loads(pickle.dumps(functools.partial(policy.PolicyBot, p, use_exploits=False)))
     b = fac()
-    assert b.params == p and b.use_exploits is False and b.blueprint is None
+    assert b.params == p and b.use_exploits is False and b.blueprint is policy.WARMUP.blueprint
     assert pickle.loads(pickle.dumps(policy.PolicyBot)) is policy.PolicyBot
     assert policy.PolicyBot().params == HeuristicParams()
     assert policy.PolicyBot(use_blueprint=False).blueprint is None
@@ -482,7 +489,9 @@ def test_warmup_is_idempotent_and_recorded():
     w = policy.WARMUP
     policy.warmup()
     assert policy.WARMUP is w                       # the second call does nothing
-    assert w.failed == () and w.seconds < 6.0 and w.blueprint is None
+    assert w.failed == () and w.seconds < 6.0 and w.tree is not None
+    # data/blueprint.npz is optional: without it the bot is heuristic-only (v2).
+    assert (w.blueprint is not None) == policy.BLUEPRINT_PATH.is_file()
 
 
 @pytest.mark.parametrize("damage", ["missing", "corrupt"])

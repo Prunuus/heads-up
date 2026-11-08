@@ -3,14 +3,30 @@
 PolicyBot.choose_action (the module-level decide) runs, per decision:
 0. Opponent model: memory["opp"].observe(obs) first (bot/opponent.py, Task 13);
    on_hand_end feeds it every finished hand with finish(result).
-1. Blueprint: only if a blueprint is loaded and memory["config_ok"], meaning this half's
-   game (stack, blinds, raise cap) is the one it was trained for. The slot stays empty
-   until Task 20.
+1. Blueprint (Task 20): only if a blueprint is loaded, the street is in
+   blueprint_streets, and memory["config_ok"], meaning this half's game (stack, blinds,
+   raise cap) is the one in the blueprint's meta. node_of(obs) -> the actor's bucket for
+   (street, hole, board) -> Blueprint.act(node, bucket, legal, rng, purify). The bucket
+   is deterministic (bot/abstraction.py: the TimeManager's iters are passed but ignored)
+   and cached in memory["bucket"] per (street, hole, board), so a second decision on a
+   street costs only node_of and act. A node miss (an observation the betting tree cannot
+   show) gives no answer and is counted in memory["layers"]["node_miss"], not as a fault.
 2. Heuristic: compute_features + heuristic_action, whenever the blueprint gives no answer.
    It reads every size from obs, so it also plays a retuned game.
 3. Exploits: bot.exploit.apply_exploits modifies the base action from step 1 or 2,
-   from the opponent model's evidence (Task 14).
-So base = blueprint else heuristic, and exploits then modify the base. Each layer has
+   from the opponent model's evidence (Task 14). On a blueprint base:
+   - check-folder (RAISE_HALF when legal) and I6 (computes its own nut flag) need no
+     Features and apply as on a heuristic base;
+   - the maniac and station modes re-run the heuristic with shifted params, which needs
+     Features. They are computed (as the heuristic would, iters from the TimeManager)
+     only while one of those modes is active (exploit_features=True, the default), so the
+     common blueprint decision stays cheap. The re-run's guard keeps the blueprint's
+     action wherever the re-run would fold a hand the blueprint plays on: in those modes
+     v3 plays v2's validated exploit, never tighter than the blueprint.
+   - Preflop the heuristic layer always runs as the online CPU-factor sample (T11 M2,
+     below), so preflop Features are there for free.
+So base = blueprint else heuristic, and exploits then modify the base. memory["layers"]
+counts which base layer answered (blueprint, heuristic) and the node misses. Each layer has
 its own try/except and catches any Exception (a corrupt observation, a
 missing table, a bug). A layer must answer with a legal Action. Otherwise it counts a
 fault in memory["faults"] and the decision moves on: a failed base layer leaves the next
@@ -22,8 +38,10 @@ Time (rulings R9, R30a). TimeManager.begin()/end() wrap every choose_action in
 try/finally, so the per-request grace applies once per call. on_hand_end work is charged
 in full with add(dt). The grace (grace_for_cpu_factor) is sized by a CPU factor, where
 1.0 is the dev PC. warmup() times a fixed workload against its dev-PC time. During play,
-each preflop heuristic decision is a fixed workload too, and the median of the last 64
-is compared with its dev-PC median. The larger of the two factors sizes the grace.
+each preflop decision runs the preflop heuristic layer, a fixed workload that draws no
+random numbers, whichever layer answers (with a blueprint base its answer is discarded),
+and the median of the last 64 is compared with its dev-PC median. The larger of the two
+factors sizes the grace.
 
 Simulated slow CPU (ruling R30b). sim.match can emulate a CPU s times slower: it charges
 s x the measured time minus a grace of 1 ms - 0.25 ms * s, and sends s as
@@ -38,8 +56,9 @@ times s (see PREFLOP_REF_S), so the bot over-counts there: the safe direction.
 
 State (R22). Module state is what warmup() loads: written once, read-only afterwards.
 Per-half state lives in memory (tm, time_scale, rng, opp, config_ok, cpu, faults,
-exploits: the exploit layer's bot.exploit.STAT_KEYS counters). A PolicyBot holds only
-its settings. Never pickle bot.* objects during play: sim.match.load_bot_file runs each
+exploits: the exploit layer's bot.exploit.STAT_KEYS counters, layers, bucket). The
+blueprint and the betting tree are read-only module data from warmup. A PolicyBot holds
+only its settings. Never pickle bot.* objects during play: sim.match.load_bot_file runs each
 half on a private copy of the bot package, and pickle looks classes up in the caller's
 copy. For the same reason every import here sits at module top.
 """
@@ -51,17 +70,19 @@ import math
 import time
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 
 import numpy as np
 
 import evaluator
-from bot import equity, exploit, preflop
+from bot import abstraction, equity, exploit, preflop, strategy
 from bot.exploit import apply_exploits
 from bot.features import compute_features
 from bot.heuristic import HeuristicParams, heuristic_action
 from bot.opponent import OpponentModel
 from bot.timing import TimeManager, grace_for_cpu_factor
+from bot.tree import get_tree, node_of
 from game import (BIG_BLIND, NUM_DEALS, RAISE_CAP_PER_STREET, SMALL_BLIND, STARTING_STACK,
                   TIME_BANK_SECONDS, Action, Game, Observation, Street, make_deal)
 
@@ -75,6 +96,14 @@ DEFAULT_META = MappingProxyType({"stack": STARTING_STACK, "sb": SMALL_BLIND,
 _CONFIG_KEYS = (("stack", "starting_stack"), ("sb", "small_blind"), ("bb", "big_blind"),
                 ("cap", "raise_cap"))
 FAULT_KINDS = ("blueprint", "heuristic", "exploit", "hand_end")
+LAYER_KEYS = ("blueprint", "heuristic", "node_miss")
+
+# The blueprint layer. BLUEPRINT_PATH is read by warmup; a missing file means no blueprint
+# (heuristic only), a corrupt or stale one is a failed warmup step. PURIFY: Blueprint.act
+# zeroes probabilities below this and renormalizes (I9).
+BLUEPRINT_PATH = strategy.DEFAULT_PATH
+PURIFY = 0.1
+_RERUN_MODES = frozenset({"maniac", "station"})   # exploit modes that need Features
 
 # CPU factor. 1.0 is the dev PC (Ryzen 7 9700X, WSL2, Python 3.12.3), measured 2026-11-07
 # on the quiet machine (load ~2), pinned with taskset -c 0-7. Re-measure both constants if
@@ -168,6 +197,13 @@ def _legal(action, obs) -> bool:
 def _fault(memory, kind: str) -> None:
     try:
         memory["faults"][kind] += 1
+    except Exception:
+        pass
+
+
+def _count(memory, key: str) -> None:
+    try:
+        memory["layers"][key] += 1
     except Exception:
         pass
 
@@ -266,12 +302,14 @@ class CpuFactorEstimator:
 @dataclass(frozen=True)
 class Warmup:
     """What warmup() did: its duration, the measured CPU factor, the blueprint it loaded
-    (None for none), and the names of the steps that failed."""
+    (None for none), the names of the steps that failed, and the betting tree (None if
+    it failed to build)."""
 
     seconds: float
     cpu_factor: float
     blueprint: object
     failed: tuple
+    tree: object = None
 
 
 WARMUP: Warmup | None = None
@@ -313,17 +351,38 @@ def _dummy_decisions() -> None:
 
 
 def _load_blueprint():
-    """The blueprint for the blueprint layer: Task 20 loads data/blueprint.npz here
-    (bot.strategy.Blueprint, with .meta), and gives None if it is missing or unreadable.
-    No blueprint exists yet."""
-    return None
+    """The blueprint at BLUEPRINT_PATH (bot.strategy.Blueprint, verified against the
+    runtime's tree, rules and bucket table), or None when there is no file. Raises
+    ValueError for a corrupt or stale file, which warmup records as a failed step."""
+    path = Path(BLUEPRINT_PATH)
+    if not path.is_file():
+        return None
+    return strategy.Blueprint.load(path, tree=get_tree())
+
+
+def _blueprint_selftest(blueprint, tree) -> bool:
+    """Every warmup spot (all four streets, facing a bet) must map to a node and get a
+    legal action from the blueprint. This also touches every lazy cache of node_of,
+    bucket and act. Raises on any failure: warmup then drops the blueprint."""
+    rng = np.random.default_rng(RNG_SEED)
+    for obs in _warmup_spots():
+        node = node_of(obs, tree)
+        if node is None:
+            raise RuntimeError(f"warmup spot outside the betting tree: {obs.action_history}")
+        b = abstraction.bucket(obs.street, obs.hole_cards, obs.board)
+        a = blueprint.act(node, b, obs.legal_actions, rng, PURIFY)
+        if not _legal(a, obs):
+            raise RuntimeError(f"blueprint answered {a!r}, not in {obs.legal_actions}")
+    return True
 
 
 def warmup() -> None:
     """Load every table and touch every lazy cache before the first request. The first
     call in a process does the work; later calls return at once. Never raises: a failed
     step is listed in WARMUP.failed, and the bot plays on without it (the heuristic has
-    defaults for a missing table)."""
+    defaults for a missing table). The blueprint is loaded only when the tree and the
+    bucket tables are, and kept only if it passes its self-test; else it is None and the
+    bot plays the heuristic (v2) everywhere."""
     global WARMUP
     if WARMUP is not None:
         return
@@ -341,10 +400,17 @@ def warmup() -> None:
     step("equity", equity.warmup)             # fasteval's table + the zero-budget reference
     step("preflop", _touch_preflop)
     step("nut_flags", _touch_nut_flags)
-    blueprint = step("blueprint", _load_blueprint)
+    tree = step("tree", get_tree)             # the betting tree (~0.4 s)
+    step("abstraction", abstraction.warmup)   # bucket tables
+    blueprint = None
+    if tree is not None and "abstraction" not in failed:
+        blueprint = step("blueprint", _load_blueprint)
+        if blueprint is not None and not step("blueprint_selftest",
+                                              lambda: _blueprint_selftest(blueprint, tree)):
+            blueprint = None
     step("decisions", _dummy_decisions)       # one compute_features + heuristic per spot
     factor = measure_cpu_factor()             # last: everything above is warm by now
-    WARMUP = Warmup(_clock() - t0, factor, blueprint, tuple(failed))
+    WARMUP = Warmup(_clock() - t0, factor, blueprint, tuple(failed), tree)
 
 
 # -------------------------------------------------------------------------- PolicyBot
@@ -352,22 +418,33 @@ def warmup() -> None:
 class PolicyBot:
     """The shipped bot. BotLike: new_half / choose_action / on_hand_end.
 
-    params         heuristic thresholds (default HeuristicParams())
-    use_blueprint  consult the blueprint when one is loaded and the game matches it
-    use_exploits   run the exploit layer on the base action
+    params             heuristic thresholds (default HeuristicParams())
+    use_blueprint      consult the blueprint when one is loaded and the game matches it;
+                       False is v2 (the heuristic base, decision for decision)
+    use_exploits       run the exploit layer on the base action
+    purify             Blueprint.act's purification threshold (default PURIFY)
+    blueprint_streets  the streets on which the blueprint is consulted (default all)
+    exploit_features   with a blueprint base, compute Features for the maniac/station
+                       re-runs while such a mode is active (False: those modes do not
+                       apply to a blueprint base postflop)
 
     The class itself and functools.partial(PolicyBot, ...) are picklable factories. The
     instance keeps settings only; everything per half lives in memory.
     """
 
     def __init__(self, params: HeuristicParams | None = None, use_blueprint: bool = True,
-                 use_exploits: bool = True) -> None:
+                 use_exploits: bool = True, purify: float = PURIFY,
+                 blueprint_streets=tuple(Street), exploit_features: bool = True) -> None:
         warmup()                  # once per process (a sim factory call is untimed)
         w = WARMUP
         self.params = params if params is not None else HeuristicParams()
         self.use_blueprint = bool(use_blueprint)
         self.use_exploits = bool(use_exploits)
+        self.purify = float(purify)
+        self.blueprint_streets = frozenset(Street(s) for s in blueprint_streets)
+        self.exploit_features = bool(exploit_features)
         self.blueprint = w.blueprint if self.use_blueprint and w is not None else None
+        self.tree = w.tree if w is not None else None
         self.cpu_factor = w.cpu_factor if w is not None else 1.0
 
     def new_half(self, config, memory: dict) -> None:
@@ -398,6 +475,8 @@ class PolicyBot:
             memory["cpu"] = CpuFactorEstimator()
             memory["faults"] = dict.fromkeys(FAULT_KINDS, 0)
             memory["exploits"] = dict.fromkeys(exploit.STAT_KEYS, 0)
+            memory["layers"] = dict.fromkeys(LAYER_KEYS, 0)
+            memory["bucket"] = None         # ((street, hole, board), bucket) of the last lookup
         except Exception:
             pass
 
@@ -444,21 +523,28 @@ class PolicyBot:
         if self.blueprint is not None and config_ok:
             try:
                 base = self._blueprint_action(obs, memory)
-                if base is not None and not _legal(base, obs):
-                    _fault(memory, "blueprint")
-                    base = None
+                if base is not None:
+                    if _legal(base, obs):
+                        _count(memory, "blueprint")
+                    else:
+                        _fault(memory, "blueprint")
+                        base = None
             except Exception:
                 _fault(memory, "blueprint")
                 base = None
         if base is None:
             try:
                 feats, base = self._heuristic_action(obs, memory, tm)
-                if not _legal(base, obs):
+                if _legal(base, obs):
+                    _count(memory, "heuristic")
+                else:
                     _fault(memory, "heuristic")
                     base = None
             except Exception:
                 _fault(memory, "heuristic")
                 base = None
+        else:
+            feats = self._blueprint_extras(obs, memory, tm)
         action = base
         if base is not None and self.use_exploits:
             try:
@@ -472,8 +558,42 @@ class PolicyBot:
         return action if _legal(action, obs) else fallback_action(obs)
 
     def _blueprint_action(self, obs, memory):
-        """Blueprint layer slot. Task 20 fills it: node_of -> bucket -> Blueprint.act.
-        Returns a legal Action, or None for no answer (the heuristic then plays)."""
+        """node_of -> bucket (cached per street, hole and board) -> Blueprint.act.
+        Returns an Action, or None for no answer (the heuristic then plays): a street
+        outside blueprint_streets, or a node miss. May raise; the caller counts a fault."""
+        street = obs.street
+        if street not in self.blueprint_streets:
+            return None
+        node = node_of(obs, self.tree)
+        if node is None:
+            _count(memory, "node_miss")
+            return None
+        key = (street, obs.hole_cards, obs.board)
+        cached = memory.get("bucket")
+        if cached is not None and cached[0] == key:
+            b = cached[1]
+        else:
+            tm = _time_manager(memory)
+            iters = tm.iters(obs.pot, street, obs.hand_index) if tm is not None else 0
+            b = abstraction.bucket(street, obs.hole_cards, obs.board, iters)
+            memory["bucket"] = (key, b)
+        return self.blueprint.act(node, b, obs.legal_actions, memory["rng"], self.purify)
+
+    def _blueprint_extras(self, obs, memory, tm):
+        """After the blueprint answered: Features for the exploit layer, or None.
+        Preflop the heuristic layer runs anyway as the online CPU sample (T11 M2; it draws
+        no random numbers there) and its Features are returned. Postflop Features are
+        computed only for an active maniac/station re-run (module docstring). Never
+        raises: a failure here only costs the exploit layer its Features."""
+        try:
+            if obs.street == Street.PREFLOP:
+                return self._heuristic_action(obs, memory, tm)[0]
+            if (self.use_exploits and self.exploit_features
+                    and exploit.active_mode(_opponent(memory)) in _RERUN_MODES):
+                iters = tm.iters(obs.pot, obs.street, obs.hand_index) if tm is not None else 0
+                return compute_features(obs, iters, memory["rng"])
+        except Exception:
+            pass
         return None
 
     def _heuristic_action(self, obs, memory, tm):
@@ -491,8 +611,8 @@ class PolicyBot:
 
     def _exploit_action(self, base, obs, feats, memory):
         """Exploit layer: bot.exploit.apply_exploits on the base, with this bot's heuristic
-        params and the half's counters. feats is None when the base came from the
-        blueprint."""
+        params and the half's counters. With a blueprint base feats is None postflop
+        unless a re-run mode is active (_blueprint_extras)."""
         return apply_exploits(base, obs, feats, _opponent(memory), memory["rng"], self.params,
                               memory.get("exploits"))
 

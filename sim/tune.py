@@ -306,7 +306,8 @@ def tune(param_space: dict, opponents="train", seeds: list | None = None, deals:
 
     def evaluate(cands: list, batch: int) -> list:
         ss = group(batch)
-        jobs = [(i, functools.partial(PolicyBot, p), o, f, s, deals, time_scale)
+        jobs = [(i, functools.partial(PolicyBot, p, use_blueprint=False), o, f, s, deals,
+                 time_scale)
                 for s in ss for o, f in opps.items() for i, p in enumerate(cands)]
         results = (pool.imap_unordered(_run_job, jobs, chunksize=1) if pool is not None
                    else map(_run_job, jobs))
