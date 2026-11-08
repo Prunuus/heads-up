@@ -150,7 +150,7 @@ class _SlowNewHalf(_Bot):
 
 class _SlowHandEnd(_Bot):
     def on_hand_end(self, result, memory):
-        time.sleep(0.004)
+        time.sleep(0.025)
 
 
 class _StrAction(str, enum.Enum):
@@ -232,11 +232,15 @@ def test_timeouts_match_the_judge(servers, monkeypatch, bot):
 
 @pytest.mark.parametrize("bot", ["slow-every-2nd", "slow-hand-end"])
 def test_bank_out_matches_the_judge(servers, bot):
-    f = {"slow-every-2nd": functools.partial(_SlowEvery, 2, 0.015),
+    # The in-process client's own round trip is charged to BOTH seats by the judge but
+    # not by the sim: ~1.9 ms/request on a WSL2 PC (0.29 ms with real uvicorn), i.e.
+    # ~0.2 s over 60 deals for the fast seat. The bank leaves the fast seat ~3x that
+    # headroom, and each slow bot asks for at least ~2x the bank.
+    f = {"slow-every-2nd": functools.partial(_SlowEvery, 2, 0.03),
          "slow-hand-end": _SlowHandEnd}[bot]
     cs = ZOO["calling_station"]
-    sf = sim_facts(sim_half(f, cs, "j5", 1, 60, time_bank_s=0.15))
-    jf = judge_facts(judge_half(servers, f, cs, "j5", 1, 60, time_bank_s=0.15))
+    sf = sim_facts(sim_half(f, cs, "j5", 1, 60, time_bank_s=0.6))
+    jf = judge_facts(judge_half(servers, f, cs, "j5", 1, 60, time_bank_s=0.6))
     for k in ("nets", "calls"):          # where exactly the bank runs dry is timing jitter
         del sf[k], jf[k]
     assert sf == jf and sf["bank_empty"] == (True, False) and sf["errors"] == (0, 0)

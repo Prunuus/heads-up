@@ -3,6 +3,7 @@
 CLI (run from the repo root with .venv/bin/python):
   -m sim.tournament --candidate agent --opponents train --seeds 3 --deals 300
   -m sim.tournament --entrants zoo --seeds 1 --deals 300 --report docs/zoo_report.md
+  --time-scale 2.5 emulates a CPU 2.5x slower than this one for every bot (sim.match).
 """
 
 from __future__ import annotations
@@ -54,8 +55,8 @@ class FocusReport:
 # ---------------------------------------------------------------- execution
 
 def _run_job(job):
-    name_a, fa, name_b, fb, seed, deals = job
-    return name_a, name_b, seed, play_match(fa, fb, seed, deals)
+    name_a, fa, name_b, fb, seed, deals, time_scale = job
+    return name_a, name_b, seed, play_match(fa, fb, seed, deals, time_scale=time_scale)
 
 
 def _run_jobs(jobs: list, workers: int) -> list:
@@ -70,9 +71,9 @@ def _run_jobs(jobs: list, workers: int) -> list:
 # --------------------------------------------------------------- round robin
 
 def run_round_robin(entrants: dict, seeds: list, deals: int,
-                    workers: int = os.cpu_count() or 1) -> Standings:
+                    workers: int = os.cpu_count() or 1, time_scale: float = 1.0) -> Standings:
     names = list(entrants)
-    jobs = [(a, entrants[a], b, entrants[b], str(s), deals)
+    jobs = [(a, entrants[a], b, entrants[b], str(s), deals, time_scale)
             for a, b in itertools.combinations(names, 2) for s in seeds]
     results = _run_jobs(jobs, workers)
 
@@ -124,8 +125,8 @@ def run_round_robin(entrants: dict, seeds: list, deals: int,
 # --------------------------------------------------------------- focus eval
 
 def focus_eval(candidate: BotFactory, opponents: dict, seeds: list, deals: int,
-               workers: int = os.cpu_count() or 1) -> FocusReport:
-    jobs = [("cand", candidate, o, f, str(s), deals)
+               workers: int = os.cpu_count() or 1, time_scale: float = 1.0) -> FocusReport:
+    jobs = [("cand", candidate, o, f, str(s), deals, time_scale)
             for o, f in opponents.items() for s in seeds]
     matches: dict = {o: {} for o in opponents}
     for _a, o, s, m in _run_jobs(jobs, workers):
@@ -157,7 +158,7 @@ def mean_ci(d) -> tuple:
 
 
 def paired_diff(cand_a: BotFactory, cand_b: BotFactory, opponents: dict, seeds: list,
-                deals: int, workers: int = 1) -> tuple:
+                deals: int, workers: int = 1, time_scale: float = 1.0) -> tuple:
     """Return (ci_low, mean, ci_high) of the per-deal bb difference A - B.
 
     Same opponents and seeds for both; all deals are pooled and the CI is
@@ -166,8 +167,8 @@ def paired_diff(cand_a: BotFactory, cand_b: BotFactory, opponents: dict, seeds: 
     jobs = []
     for o, f in opponents.items():
         for s in seeds:
-            jobs.append(("A", cand_a, o, f, str(s), deals))
-            jobs.append(("B", cand_b, o, f, str(s), deals))
+            jobs.append(("A", cand_a, o, f, str(s), deals, time_scale))
+            jobs.append(("B", cand_b, o, f, str(s), deals, time_scale))
     res = {}
     for who, o, s, m in _run_jobs(jobs, workers):
         res[(who, o, str(s))] = _per_deal_bb(m)
@@ -192,9 +193,12 @@ def resolve_bot(spec: str) -> BotFactory:
     raise ValueError(f"cannot resolve bot {spec!r}: not 'agent', a ZOO name or a bot file")
 
 
+OPPONENT_SPLITS = ("train", "holdout", "field", "field2", "all")     # "all" includes FIELD, FIELD2
+
+
 def select_opponents(which: str) -> dict:
-    from sim.opponents import HOLDOUT, TRAIN, ZOO
-    keep = {"train": TRAIN, "holdout": HOLDOUT, "all": set(ZOO)}[which]
+    from sim.opponents import FIELD, FIELD2, HOLDOUT, TRAIN, ZOO
+    keep = {"train": TRAIN, "holdout": HOLDOUT, "field": FIELD, "field2": FIELD2, "all": set(ZOO)}[which]
     return {k: v for k, v in ZOO.items() if k in keep}
 
 
@@ -275,19 +279,21 @@ def _seed_list(args) -> list:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="sim.tournament")
     ap.add_argument("--candidate")
-    ap.add_argument("--opponents", choices=["train", "holdout", "all"], default="train")
+    ap.add_argument("--opponents", choices=OPPONENT_SPLITS, default="train")
     ap.add_argument("--entrants", choices=["zoo"])
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("--seed-prefix", default="s")
     ap.add_argument("--deals", type=int, default=300)
     ap.add_argument("--workers", type=int, default=os.cpu_count() or 1)
+    ap.add_argument("--time-scale", type=float, default=1.0,
+                    help="emulate a CPU this many times slower than this one (both bots)")
     ap.add_argument("--report")
     args = ap.parse_args(argv)
     seeds = _seed_list(args)
     t0 = time.time()
     if args.entrants == "zoo":
         from sim.opponents import ZOO
-        st = run_round_robin(dict(ZOO), seeds, args.deals, args.workers)
+        st = run_round_robin(dict(ZOO), seeds, args.deals, args.workers, args.time_scale)
         for r in st.rows:
             print(f"{r.name:22s} pts={r.points:6.1f} bb={r.mean_bb:+.3f} L={r.losses} F={r.forfeits} bank={r.max_bank:.3f}")
         if args.report:
@@ -297,7 +303,8 @@ def main(argv=None) -> int:
     if not args.candidate:
         ap.error("need --candidate or --entrants zoo")
     opps = select_opponents(args.opponents)
-    rep = focus_eval(resolve_bot(args.candidate), opps, seeds, args.deals, args.workers)
+    rep = focus_eval(resolve_bot(args.candidate), opps, seeds, args.deals, args.workers,
+                     args.time_scale)
     print(f"{'opponent':22s} {'points':>7s} {'mean_bb':>9s}")
     for o, d in rep.matches.items():
         ms = list(d.values())
