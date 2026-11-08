@@ -15,7 +15,25 @@ SUITS = {(2, 2, 1): 12, (2, 1, 1, 1): 4, (3, 2): 7,
          (3, 1, 1): 2, (4, 1): -4, (5,): -9}
 
 
+def _hole_cards(hole):
+    hole = tuple(hole)
+    if (len(hole) != 5 or any(type(c) is not int or not 0 <= c < 36 for c in hole)
+            or len(set(hole)) != 5):
+        raise ValueError("expected five distinct short-deck hole cards")
+    return hole
+
+
+def _visible_cards(hole, board):
+    hole, board = _hole_cards(hole), tuple(board)
+    if (len(board) not in (3, 4, 5)
+            or any(type(c) is not int or not 0 <= c < 36 for c in board)
+            or len(set(hole + board)) != len(hole) + len(board)):
+        raise ValueError("expected three to five distinct, non-overlapping board cards")
+    return hole, board
+
+
 def preflop_score(hole):
+    hole = _hole_cards(hole)
     ranks = [0] * 9
     suits = [0] * 4
     for c in hole:
@@ -34,6 +52,9 @@ def preflop_score(hole):
 
 
 def sample_indices(hole, board, salt=0):
+    hole, board = _visible_cards(hole, board)
+    if type(salt) is not int or not 0 <= salt < 2**32:
+        raise ValueError("sampler salt must be an unsigned 32-bit integer")
     n = comb(36 - len(hole) - len(board), 2)
     payload = (b"PB4/REDUCED64\0" + bytes(sorted(hole))
                + bytes((len(board) - 2, len(board))) + bytes(board) + salt.to_bytes(4, "big"))
@@ -60,6 +81,7 @@ def pair_score(a, b, masks, table):
 
 
 def visible_score(hole, board):
+    hole, board = _visible_cards(hole, board)
     masks = board_masks(board)
     table = get_table()
     return max(pair_score(a, b, masks, table) for a, b in combinations(hole, 2))
@@ -67,6 +89,13 @@ def visible_score(hole, board):
 
 def draw_routes(hole, board, category):
     """Each tuple contains a target and its exact marginal runout probability."""
+    hole, board = _visible_cards(hole, board)
+    if type(category) is not int or not 0 <= category <= 8:
+        raise ValueError("invalid short-deck hand category")
+    return _draw_routes(hole, board, category)
+
+
+def _draw_routes(hole, board, category):
     k = 5 - len(board)
     if k not in (1, 2) or category >= 6:
         return ()
@@ -120,6 +149,7 @@ class Assessment:
 
 
 def assess(hole, board, mode=FULL, salt=0):
+    hole, board = _visible_cards(hole, board)
     if mode not in MODES:
         raise ValueError("unknown evaluator mode")
     table = get_table()
@@ -152,6 +182,6 @@ def assess(hole, board, mode=FULL, salt=0):
         tier = "STRONG"
     else:
         tier = "MEDIUM" if risk <= .12 else "WEAK"
-    draw = max((r[2] for r in draw_routes(hole, board, cat)), default=0.)
+    draw = max((r[2] for r in _draw_routes(hole, board, cat)), default=0.)
     return Assessment(score, n, beating, ties, risk, ties / n, tier, current,
                       locked, current and not locked, danger, draw, mode)
