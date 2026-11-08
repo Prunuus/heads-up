@@ -9,9 +9,11 @@ The bot is **finished, verified and pushed**. Deadline: **2026-11-08 12:00 CST**
 | Form | https://forms.gle/a6Nr9VxXD9RYvi9x7 (the latest guide; the old form link is dead) |
 | Team | `3XKO` (must match the registration exactly) |
 | Repo | `https://github.com/Prunuus/heads-up` (public; no branch in the URL) |
-| Commit SHA | **`c1ded1661937b4ffce15d875e65b3f0ccaff89a4`** (branch `kevin`) |
+| Commit SHA | **the head of `origin/kevin` after the v3.2 push** (the exact 40-char SHA is in the chat summary and in `sdd-workspace/progress.md`); `c1ded1661937b4ffce15d875e65b3f0ccaff89a4` is the verified v3.1 fallback |
 
-The tournament builds exactly that commit. A failed build keeps your previous working bot, and the latest successful build is the one that plays.
+**v3.2 (2026-11-08 morning audit).** One change on top of v3.1: on the blueprint base the "maniac" exploit override applies only to opponents whose recent raise rate is >= 0.75 (bots that bet nearly everything); below that the equilibrium action stands, with the station fallback. Paired vs v3.1 on identical cards (6 seeds x 1,000 deals): Posterior +1.78 bb/deal [+1.17, +2.38], SharkTank +1.05 [+0.51, +1.58], Metagame +-0, always_pot / always_half bit-identical, maniac -1.76, random -1.63, llm_aggressive -0.99 (all of those remain wins by >= +2.4). Release bar on v3.2: 672 tests; check_build passed; in-image probe 134/134 blueprint answers; real judge at 1 CPU 12/12 wins, 0 errors, bank <= 0.91 s; vs v2 head-to-head +0.49 [+0.19, +0.79]; points vs HOLDOUT 0.917, FIELD 0.667, FIELD2 0.722 (v2: 0.958 / 0.111 / 0.167). Details in `docs/results/v3.md`.
+
+The tournament builds exactly the submitted commit. A failed build keeps your previous working bot, and the latest successful build is the one that plays.
 
 Earlier fallbacks, all on GitHub:
 - v2 `2115725fd2a0f9fac4f0dab081ae84c7a60f93b7`

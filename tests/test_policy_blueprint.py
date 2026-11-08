@@ -181,7 +181,7 @@ def test_blueprint_streets_limits_the_layer():
 # ------------------------------------------------------------ exploits on the blueprint
 
 def test_check_folder_exploit_applies_to_a_blueprint_base(monkeypatch):
-    monkeypatch.setattr(exploit, "active_mode", lambda opp: "check_folder")
+    monkeypatch.setattr(exploit, "active_mode", lambda opp, strict_maniac=False: "check_folder")
     bot, memory = _bp_bot(FakeBlueprint(pick=lambda legal: Action.CHECK_CALL))
     for obs in _observations("bp-cf", 15):
         want = Action.RAISE_HALF if Action.RAISE_HALF in obs.legal_actions else Action.CHECK_CALL
@@ -193,7 +193,7 @@ def test_check_folder_exploit_applies_to_a_blueprint_base(monkeypatch):
 def test_re_run_modes_get_features_only_when_active(monkeypatch, mode):
     # With a blueprint base the maniac/station re-runs need Features: they are computed
     # only while such a mode is active (with no mode the blueprint path stays cheap).
-    monkeypatch.setattr(exploit, "active_mode", lambda opp: mode)
+    monkeypatch.setattr(exploit, "active_mode", lambda opp, strict_maniac=False: mode)
     got = []
     real = policy.apply_exploits
 
@@ -217,7 +217,7 @@ def test_re_run_modes_get_features_only_when_active(monkeypatch, mode):
 
 
 def test_exploit_features_off_keeps_the_blueprint_path_feature_free(monkeypatch):
-    monkeypatch.setattr(exploit, "active_mode", lambda opp: "maniac")
+    monkeypatch.setattr(exploit, "active_mode", lambda opp, strict_maniac=False: "maniac")
     got = []
     monkeypatch.setattr(policy, "apply_exploits",
                         lambda base, obs, feats, *a, **k: got.append((obs.street, feats)) or base)
