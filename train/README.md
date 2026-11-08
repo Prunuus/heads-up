@@ -149,7 +149,7 @@ The trainer solves the abstract game of the deal dataset: chance draws a row uni
 ### The long run
 
     mkdir -p train_data/mccfr
-    nohup python -m train.mccfr --deals train_data/d10m --iterations 12_000_000_000 \
+    nohup python -m train.mccfr --deals train_data/d10m --iterations 24_000_000_000 \
         --out train_data/mccfr/blueprint_raw.npz --seed 0 --threads 16 --count-visits \
         --max-hours 6 > train_data/mccfr/train.log 2>&1 &
 
