@@ -168,7 +168,7 @@ def measure_cpu_factor(reference_s: float | None = None, runs: int = REF_RUNS) -
             t0 = _clock()
             reference_workload(payload)
             best = min(best, _clock() - t0)
-        return _clamp_factor(best / ref)
+        return _clamp_factor(best / ref) if best < math.inf else 1.0
     except Exception:
         return 1.0
 

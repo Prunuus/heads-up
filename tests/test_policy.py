@@ -308,6 +308,7 @@ def test_cpu_factor_measurement_floors_and_clamps():
     assert policy.measure_cpu_factor(reference_s=1e-12) == policy.F_MAX
     assert policy.measure_cpu_factor(reference_s=float("nan")) == 1.0
     assert policy.measure_cpu_factor(reference_s=0.0) == 1.0
+    assert policy.measure_cpu_factor(runs=0) == 1.0           # nothing measured: no change
     assert 1.0 <= policy.WARMUP.cpu_factor <= policy.F_MAX
 
 
