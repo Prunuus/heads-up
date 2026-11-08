@@ -3,11 +3,12 @@ import pickle
 import pytest
 
 from sim.match import play_half
-from sim.opponents import FORFEIT_PRONE, HOLDOUT, ZOO
+from sim.opponents import FIELD, FORFEIT_PRONE, HOLDOUT, ZOO
 from sim.opponents.archetypes import checkfold_after
 
 
-@pytest.mark.parametrize("name", list(ZOO))
+# FIELD bots take seconds each to load; tests/test_field.py plays them (short and slow halves).
+@pytest.mark.parametrize("name", [n for n in ZOO if n not in FIELD])
 def test_zoo_bot_is_legal_and_errorless(name):
     h = play_half(ZOO[name], ZOO["calling_station"], "z1", 1, deals=100)
     if name in FORFEIT_PRONE:

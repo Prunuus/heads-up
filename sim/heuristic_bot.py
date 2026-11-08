@@ -115,11 +115,11 @@ def print_rows(rows: list) -> None:
 
 
 def main(argv=None) -> int:
-    from sim.tournament import focus_eval, select_opponents
+    from sim.tournament import OPPONENT_SPLITS, focus_eval, select_opponents
     from sim.opponents import ZOO
     ap = argparse.ArgumentParser(prog="sim.heuristic_bot")
     ap.add_argument("--opponents", default="train",
-                    help="train | holdout | all | comma-separated zoo names")
+                    help=" | ".join(OPPONENT_SPLITS) + " | comma-separated zoo names")
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--seed-prefix", default="s")
     ap.add_argument("--deals", type=int, default=1000)
@@ -127,7 +127,7 @@ def main(argv=None) -> int:
     ap.add_argument("--params", default="{}", help="JSON overrides of HeuristicParams")
     ap.add_argument("--out")
     args = ap.parse_args(argv)
-    if args.opponents in ("train", "holdout", "all"):
+    if args.opponents in OPPONENT_SPLITS:
         opps = select_opponents(args.opponents)
     else:
         opps = {n: ZOO[n] for n in args.opponents.split(",")}
