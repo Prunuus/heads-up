@@ -62,6 +62,10 @@ def load_bot_file(path: str, fresh_packages: tuple = FRESH_PACKAGES) -> ModuleTy
 
     Bot code must import at load time (module top level): an import that first runs
     during play resolves against the caller's sys.modules, not the bot's private copy.
+    For the same reason a bot must not pickle objects of its private package copy
+    during play: pickle looks classes up by name in the caller's sys.modules, finds the
+    caller's copy (not the same class object), and fails. Factories are pickled before
+    any load, so they are unaffected.
     """
     p = Path(path)
     if not p.is_absolute():
