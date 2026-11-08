@@ -12,7 +12,41 @@ This is an information run for Task F, not a gate.
 - **Run.** 2026-11-07 20:01, 4 workers on CPUs 8-15 at nice 19, 57 s wall. The machine was
   heavily shared: load average 18-20 on 16 threads.
 
-## Results
+## Correction: the run below was distorted by load (read this first)
+
+The 4-worker run below ran under heavy CPU contention: load average 18-20, plus its own 4 workers
+on CPUs 8-15. That contention made all three FIELD bots' time guards degrade their own play. Its
+numbers overstate v1-untuned against all three bots.
+
+A serial rerun of the same 9 matches ran at 20:34-20:35, in one process, at load average 4-6.
+Every FIELD bot was charged at most 0.13 s per half, so it played at full strength
+(`serial_rerun.py` below):
+
+| FIELD bot | v1-untuned bb/deal | 95% CI, pooled paired (3,000 deals) | s1 | s2 | s3 |
+|---|---:|---|---|---|---|
+| `field_equity` | **-1.677** | [-2.085, -1.270] | -2.15 [-2.89, -1.42] B | -1.83 [-2.52, -1.14] B | -1.04 [-1.73, -0.36] B |
+| `field_gto` | **-1.161** | [-1.565, -0.758] | -1.29 [-2.01, -0.56] B | -1.24 [-1.90, -0.58] B | -0.96 [-1.67, -0.25] B |
+| `field_exploit` | **+0.900** | [+0.269, +1.530] | +1.02 [-0.09, +2.13] CHOP | +1.98 [+0.88, +3.08] A | -0.30 [-1.37, +0.76] CHOP |
+
+- **v1-untuned scored 2.0 points of 9:** 1 win, 2 chops and 6 losses (B is a FIELD win). The
+  run below gave 6.5.
+- **All 18 halves were clean.**
+  - FIELD bank was 0.00-0.13 s per half, with 0 errors and 0 bank-outs.
+  - Each FIELD bot raised 979-1,538 times per half.
+  - The FIELD bots' own code swallowed 0 exceptions, per the `tests/test_field.py` hook. The run
+    below had no such hook.
+- **The hook does not change results.** On s1, serial, with and without it: v1 vs field_exploit
+  scored +0.33 / -0.44, and vs field_equity -2.02 / -1.98. Both runs were at load average about
+  10-19, and both were far from the run below.
+- **Use these numbers, not the ones below,** until FIELD is rerun under controlled load. A
+  dedicated 1-CPU container is closer to this quiet run than to the loaded one.
+- **Two claims below are withdrawn:**
+  - that v1's +3.9 vs field_exploit "is not an artifact of its throttle". The tier probe counted
+    only its rules tier, not its load-driven 60-sample and lite tiers;
+  - that "no half was played on check/fold autopilot". Error counts cannot see the bots' own
+    catch-alls.
+
+## Results (loaded run, superseded by the correction above)
 
 | FIELD bot | v1-untuned bb/deal | 95% CI, pooled paired (3,000 deals) | s1 | s2 | s3 |
 |---|---:|---|---|---|---|
@@ -20,12 +54,13 @@ This is an information run for Task F, not a gate.
 | `field_gto` | **-0.011** | [-0.393, +0.370] | -0.62 [-1.32, +0.09] CHOP | +0.83 [+0.38, +1.29] A | -0.25 [-1.03, +0.52] CHOP |
 | `field_exploit` | **+3.927** | [+3.356, +4.499] | +3.94 [+2.93, +4.95] A | +3.51 [+2.49, +4.53] A | +4.33 [+3.39, +5.27] A |
 
-A is a v1-untuned win. Over the 9 matches that is 4 wins, 5 chops and no losses, 6.5 points.
-- **vs field_exploit:** v1-untuned wins every seed, by +3.9 bb/deal. The win holds even in s1,
-  where both of the bot's halves stayed under its full-Monte-Carlo cap (time tiers below).
-- **vs field_equity:** a chop on every seed, +0.22 bb/deal.
+A is a v1-untuned win. Over the 9 matches that is 4 wins, 5 chops and no losses, 6.5 points,
+at this load. At low load it is 2.0 (correction above).
+- **vs field_exploit:** v1-untuned won every seed, by +3.9 bb/deal. At low load it was +0.90.
+- **vs field_equity:** a chop on every seed, +0.22 bb/deal. At low load it was three losses,
+  -1.68.
 - **vs field_gto:** a chop overall. Its one v1 win (s2) is the seed where field_gto spent the
-  most bank. See the time tiers below before reading it as an edge.
+  most bank. At low load it was three losses, -1.16.
 
 ## Bank use and errors per half
 
@@ -52,8 +87,11 @@ Bank is the time charged to the 8 s bank in the sim, with 0.75 ms free per reque
 | `field_exploit` | s3 | 1 | 6.21 | 0 | no | no | 3565 | 2.45 | 0 | no | 101.7 |
 | `field_exploit` | s3 | 2 | 0.44 | 0 | no | no | 3657 | 0.36 | 0 | no | 19.0 |
 
-- **No FIELD bot ran out of bank in any half**, and none made an error or forfeited. So no half
-  was played on check/fold autopilot, and no result here is inflated by a bank-out.
+- **No FIELD bot ran out of bank in any half**, and none made an error or forfeited. So no result
+  here is inflated by a bank-out.
+  - Error counts cannot see the bots' own catch-alls, which check/call or fold on any exception.
+    That was checked only in the serial rerun above, which swallowed 0 exceptions.
+  - Their load-driven weaker tiers did inflate these results (correction above).
 - v1-untuned made no errors and never banked out either. Its bank use peaked at 3.22 s, and its
   longest request was 101.7 ms (s3, half 1 vs field_exploit, under load).
 - **FIELD bank use per half:**
@@ -85,23 +123,20 @@ below).
     where both halves look like that, is the only seed v1 won.
   - In the rerun, the seed where field_gto stayed at full strength longest (s3: 0% and 6%) was
     a v1 loss, -0.83 [-1.64, -0.01].
-  - **So the ≈0 vs field_gto likely overstates v1.** On a quiet machine field_gto plays its
-    sampled strategy all half. Rerun this matchup on a quiet machine before reading it as a
-    chop.
-- **field_exploit's loss to v1 is not an artifact of its throttle.** In the rerun it never
-  reached its rules tier, and v1 won all three seeds again by about the same margins.
-  - In the main run, each of its stderr lines carries its decision count. That maps each line to
-    one half exactly (requests = decisions + 2). Its own time at the end of each half was s1
+  - **So the ≈0 vs field_gto overstates v1.** The quiet serial rerun confirmed it: v1 lost all
+    three seeds, -1.16 pooled (correction above).
+- **field_exploit's loss to v1 was an artifact of its throttle.** The earlier claim that it was
+  not is withdrawn.
+  - The tier rerun found it never in its rules tier. But the probe did not count its 60-sample
+    and lite tiers, which its load-driven projections choose.
+  - At low load, v1's +3.9 became +0.90.
+  - In the main run, each of its stderr lines carries its decision count. That maps each line
+    to one half exactly (requests = decisions + 2). Its own time at the end of each half was s1
     1.21 / 1.33 s, s2 3.29 / 1.53 s and s3 6.39 / 0.81 s.
-  - Four halves stayed under its 1.76 s full-Monte-Carlo cap (22% of the bank). Two passed its
-    3.04 s rules cap: s3 half 1 by hand 500 (3.30 s there), and s2 half 1 after hand 750 (2.50 s
-    there).
-  - s1, with both halves under the full-Monte-Carlo cap, scored +3.94. s3 scored +4.33 here and
-    +4.29 in the rerun, where no half reached the rules tier.
-  - Only the rules tier was counted. Its 60-sample and lite tiers depend on its projections,
-    which the wrapper did not recompute.
-- **field_equity's tiers were not instrumented.** Its bank use (1.80-2.27 s) and request counts
-  were steady across halves.
+  - Two halves passed its 3.04 s rules cap: s3 half 1 by hand 500, and s2 half 1 after hand 750.
+- **field_equity's tiers were not instrumented, but its throttle was active.** Here it was
+  charged 1.80-2.27 s per half. At low load it was charged at most 0.13 s, and beat v1 on every
+  seed (-1.68 pooled).
 
 ## Reproduce
 
@@ -113,12 +148,17 @@ entropy, and every bot's time guard reacts to machine load.
 PYTHONPATH=. taskset -c 8-15 nice -n 19 .venv/bin/python field_info_run.py field_info.json
 PYTHONPATH=. taskset -c 8-15 nice -n 19 .venv/bin/python probe_tiers.py field_gto s1 s2 s3
 PYTHONPATH=. taskset -c 8-15 nice -n 19 .venv/bin/python probe_tiers.py field_exploit s1 s2 s3
+PYTHONPATH=. taskset -c 8-15 nice -n 19 .venv/bin/python serial_rerun.py serial_rerun.json
+PYTHONPATH=. taskset -c 8-15 nice -n 19 .venv/bin/python swallow_vs_v1.py
+PYTHONPATH=. taskset -c 8-15 nice -n 19 .venv/bin/python control_no_hook.py field_exploit field_equity
 ```
+
+The last three scripts belong to the correction. They import `tests/test_field.py` for its hook (`control_no_hook.py` does not), so run them from the repo root.
 
 `--opponents field` in `sim.tournament` and `sim.heuristic_bot` selects the same three bots,
 for the usual per-opponent points and mean bb/deal.
 
-`field_info_run.py`, verbatim. It wrote the JSON the first two tables were formatted from:
+`field_info_run.py`, verbatim. It wrote the JSON that the loaded-run tables (Results, and Bank use and errors per half) were formatted from:
 
 ```python
 """Information run (Task F): v1-untuned = bot.policy.PolicyBot() vs each FIELD bot.
@@ -233,4 +273,90 @@ for seed in sys.argv[2:]:
         print(f"{name} {seed} half {half}: v1 {m.mean_bb:+.3f} [{m.ci_low:+.3f}, {m.ci_high:+.3f}] {m.verdict}; "
               f"bank {h.bank_b:.2f} s, requests {h.calls_b}; weakest tier {p.weak}/{p.n} decisions "
               f"({100 * p.weak / max(1, p.n):.0f}%), from hand {p.first_weak}", flush=True)
+```
+
+`serial_rerun.py`, verbatim (the correction table):
+
+```python
+"""Serial rerun of the information run (v1-untuned = PolicyBot() vs each FIELD bot, seeds s1-s3,
+1000 deals per half, both halves) in ONE process, with tests/test_field.py's hook counting
+exceptions swallowed in FIELD code. Writes JSON; prints one line per match."""
+import importlib.util, json, os, sys, time
+import numpy as np
+sys.path.insert(0, ".")
+from bot.policy import PolicyBot
+from sim.match import play_match
+from sim.opponents import ZOO
+from sim.tournament import _per_deal_bb, mean_ci
+spec = importlib.util.spec_from_file_location("tf", "tests/test_field.py")
+tf = importlib.util.module_from_spec(spec); spec.loader.exec_module(tf)
+SEEDS = ["s1", "s2", "s3"]
+res = {"load_before": os.getloadavg(), "rows": {}}
+t0 = time.time()
+for name in ("field_equity", "field_gto", "field_exploit"):
+    ms, seeds = [], []
+    for s in SEEDS:
+        with tf.swallowed_exceptions() as sw:
+            m = play_match(PolicyBot, ZOO[name], s, 1000)
+        ms.append(m)
+        halves = [{"field_bank_s": h.bank_b, "field_bank_out": h.bank_exhausted_b, "field_errors": h.errors_b,
+                   "field_raises": h.actions_b.get("RAISE_HALF", 0) + h.actions_b.get("RAISE_POT", 0),
+                   "field_actions": sum(h.actions_b.values()), "v1_bank_s": h.bank_a,
+                   "v1_errors": h.errors_a, "v1_bank_out": h.bank_exhausted_a} for h in m.halves]
+        seeds.append({"seed": s, "mean_bb": m.mean_bb, "ci": [m.ci_low, m.ci_high], "verdict": m.verdict,
+                      "swallowed": len(sw), "halves": halves, "load": os.getloadavg()[0]})
+        print(f"{name} {s}: v1 {m.mean_bb:+.3f} [{m.ci_low:+.3f}, {m.ci_high:+.3f}] {m.verdict}; "
+              f"FIELD bank {' / '.join(f'{h['field_bank_s']:.2f}' for h in halves)} s, raises "
+              f"{' / '.join(str(h['field_raises']) for h in halves)}, errors {sum(h['field_errors'] for h in halves)}, "
+              f"bank-out {any(h['field_bank_out'] for h in halves)}, swallowed {len(sw)}; "
+              f"load {os.getloadavg()[0]:.1f}", flush=True)
+    lo, mid, hi = mean_ci(np.concatenate([_per_deal_bb(m) for m in ms]))
+    res["rows"][name] = {"pooled": {"mean_bb": mid, "ci": [lo, hi]}, "seeds": seeds}
+    print(f"{name} pooled: {mid:+.3f} [{lo:+.3f}, {hi:+.3f}]", flush=True)
+res["wall_s"], res["load_after"] = time.time() - t0, os.getloadavg()
+json.dump(res, open(sys.argv[1], "w"), indent=1)
+print(f"wall {res['wall_s']:.0f} s, load {res['load_before'][0]:.1f} -> {res['load_after'][0]:.1f}")
+```
+
+`swallow_vs_v1.py`, verbatim (the s1 run with the hook):
+
+```python
+"""Info-run blind-spot check: each FIELD bot vs v1-untuned (PolicyBot()), seed s1, 1000 deals per
+half, both halves, with tests/test_field.py's hook counting exceptions swallowed in FIELD code."""
+import importlib.util, sys, time
+sys.path.insert(0, ".")
+from bot.policy import PolicyBot
+from sim.match import play_match
+from sim.opponents import FIELD, ZOO
+spec = importlib.util.spec_from_file_location("tf", "tests/test_field.py")
+tf = importlib.util.module_from_spec(spec); spec.loader.exec_module(tf)
+for name in ("field_equity", "field_gto", "field_exploit"):
+    t0 = time.time()
+    with tf.swallowed_exceptions() as sw:
+        m = play_match(PolicyBot, ZOO[name], "s1", 1000)
+    for i, h in enumerate(m.halves, 1):
+        raises = h.actions_b.get("RAISE_HALF", 0) + h.actions_b.get("RAISE_POT", 0)
+        print(f"{name} s1 half {i}: FIELD raises {raises} of {sum(h.actions_b.values())} actions, "
+              f"errors {h.errors_b}, bank {h.bank_b:.2f} s, bank-out {h.bank_exhausted_b}", flush=True)
+    print(f"{name} s1: swallowed in FIELD code {len(sw)} {sw[:3]}; v1 {m.mean_bb:+.3f} "
+          f"[{m.ci_low:+.3f}, {m.ci_high:+.3f}] {m.verdict} ({time.time() - t0:.0f} s)", flush=True)
+```
+
+`control_no_hook.py`, verbatim (the s1 run without it):
+
+```python
+"""Control for swallow_vs_v1.py: the same matches (seed s1, 1000 deals/half, serial, one process)
+WITHOUT the sys.monitoring hook."""
+import sys, time
+sys.path.insert(0, ".")
+from bot.policy import PolicyBot
+from sim.match import play_match
+from sim.opponents import ZOO
+for name in sys.argv[1:]:
+    t0 = time.time()
+    m = play_match(PolicyBot, ZOO[name], "s1", 1000)
+    banks = " / ".join(f"{h.bank_b:.2f}" for h in m.halves)
+    raises = " / ".join(str(h.actions_b.get("RAISE_HALF", 0) + h.actions_b.get("RAISE_POT", 0)) for h in m.halves)
+    print(f"{name} s1 no hook: v1 {m.mean_bb:+.3f} [{m.ci_low:+.3f}, {m.ci_high:+.3f}] {m.verdict}; "
+          f"FIELD bank {banks} s; FIELD raises {raises} ({time.time() - t0:.0f} s)", flush=True)
 ```

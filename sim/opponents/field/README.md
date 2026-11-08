@@ -62,7 +62,10 @@ here under load (load average about 19 on 16 threads), it took 2.7-5.1 s for fie
 - **Time.** All three measure their own time and degrade under load (fewer Monte Carlo samples,
   then rules). Their bank use and their strength in the sim depend on machine load, like ours.
   At load average about 20, field_gto played up to 37% of a half in its no-sampling emergency
-  mode (`docs/results/field.md`). Read FIELD results with the load in mind.
+  mode. That contention made our first information run overstate v1-untuned by 1.2-3.0
+  bb/deal against these bots, compared with a quiet serial rerun (`docs/results/field.md`).
+  **Evaluate against FIELD on a quiet machine, and check the FIELD bots' bank use:** at full
+  strength each was charged at most 0.13 s per half.
 
 ## The bots
 
