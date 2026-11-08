@@ -44,7 +44,8 @@ class MeasuredHandle(HttpAgentHandle):
 def latency(values):
     ordered = sorted(values)
     return {'n': len(values), 'max_ms': max(values, default=0) * 1000,
-            **{f'p{p}_ms': ordered[min(len(ordered)-1, int(len(ordered)*p/100))] * 1000
+            **{f'p{p}_ms': (ordered[min(len(ordered)-1, int(len(ordered)*p/100))] * 1000
+                            if ordered else 0)
                for p in (50, 95, 99)}}
 
 
@@ -62,8 +63,9 @@ def run_half(mode, opponent, seed, half, out, adaptation, bluffs, deals, strateg
     try:
         processes.append(subprocess.Popen([sys.executable, str(Path(__file__).with_name('serve_candidate.py'))], env=env, cwd=ROOT, stdout=logfile, stderr=logfile))
         processes.append(subprocess.Popen([sys.executable, str(script)], env=dict(os.environ, PORT='5009'), cwd=ROOT, stdout=logfile, stderr=logfile))
-        handles = [MeasuredHandle('http://127.0.0.1:5008', AgentConfig(num_hands=deals)),
-                   MeasuredHandle('http://127.0.0.1:5009', AgentConfig(num_hands=deals))]
+        token = os.environ.get('AGENT_TOKEN') or None
+        handles = [MeasuredHandle('http://127.0.0.1:5008', AgentConfig(num_hands=deals), token),
+                   MeasuredHandle('http://127.0.0.1:5009', AgentConfig(num_hands=deals), token)]
         if not all(h.wait_healthy(12.) for h in handles):
             raise RuntimeError('startup health failed')
         startup = time.perf_counter() - start
@@ -80,7 +82,11 @@ def run_half(mode, opponent, seed, half, out, adaptation, bluffs, deals, strateg
         for p in processes:
             p.terminate()
         for p in processes:
-            p.wait(timeout=10)
+            try:
+                p.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                p.wait(timeout=10)
         for h in handles:
             if h._conn:
                 h._conn.close()
