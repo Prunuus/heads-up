@@ -193,9 +193,12 @@ def resolve_bot(spec: str) -> BotFactory:
     raise ValueError(f"cannot resolve bot {spec!r}: not 'agent', a ZOO name or a bot file")
 
 
+OPPONENT_SPLITS = ("train", "holdout", "field", "all")     # "all" includes FIELD
+
+
 def select_opponents(which: str) -> dict:
-    from sim.opponents import HOLDOUT, TRAIN, ZOO
-    keep = {"train": TRAIN, "holdout": HOLDOUT, "all": set(ZOO)}[which]
+    from sim.opponents import FIELD, HOLDOUT, TRAIN, ZOO
+    keep = {"train": TRAIN, "holdout": HOLDOUT, "field": FIELD, "all": set(ZOO)}[which]
     return {k: v for k, v in ZOO.items() if k in keep}
 
 
@@ -276,7 +279,7 @@ def _seed_list(args) -> list:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="sim.tournament")
     ap.add_argument("--candidate")
-    ap.add_argument("--opponents", choices=["train", "holdout", "all"], default="train")
+    ap.add_argument("--opponents", choices=OPPONENT_SPLITS, default="train")
     ap.add_argument("--entrants", choices=["zoo"])
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("--seed-prefix", default="s")
