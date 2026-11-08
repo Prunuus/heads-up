@@ -1,15 +1,16 @@
-# 3XKO poker bot v0.5
+# 3XKO poker bot
 
 Deterministic heads-up short-deck PLO5 bot for the TAMU Datathon challenge.
 Repository work is on **`licheng`**. Participant: `3XKO`; bot: `3XKO`.
 Use your registered team name when submitting.
 
-This builds on the supplied [v0.4 design](design/DESIGN.md). The user-authorized
-v0.5 revision corrects aggression classification and overfolding, with controlled
-development comparisons and a new sealed audit. Read
-[the current release report](reports/v05/RELEASE.md) for results and limitations.
-The [v0.4 report](reports/RELEASE.md) is historical. Passing unit tests
-alone does not establish tournament readiness.
+The current engineering review fixes transactional opponent tracking, raise and
+result validation, evaluator input handling, and the HTTP validation tools. Read
+[the current audit](reports/audit/REVIEW.md) for defects, verification, and limits.
+The strategy remains `v05_limp20`, based on the supplied
+[v0.4 design](design/DESIGN.md). The [v0.5 strategy report](reports/v05/RELEASE.md)
+and [v0.4 report](reports/RELEASE.md) describe historical source revisions;
+their frozen hashes and tournament results do not qualify later edits.
 
 Install with Python 3.12 (the official container runtime) or Python 3.13:
 
@@ -17,7 +18,7 @@ Install with Python 3.12 (the official container runtime) or Python 3.13:
 git switch licheng
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements-dev.txt
-.venv/Scripts/python -m pytest -q
+.venv/Scripts/python -m pytest -q --basetemp=.work/pytest
 .venv/Scripts/python agent.py
 ```
 
@@ -37,6 +38,18 @@ In separate terminals, start an opponent and the official judge:
 The judge plays two halves with seats swapped. Practice commands reuse processes;
 the research runner restarts both servers for every half. Do not use sealed
 `final-*` seeds for exploratory play.
+
+To validate the actual configuration in `agent.py` against all four official
+baselines, with fresh servers each half, run:
+
+```powershell
+.venv/Scripts/python tools/validate_bot.py --output reports/practice-audit
+```
+
+The output directory must be new. This runs four complete duplicate matches and
+records referee errors, internal errors, time banks, latency, and source hashes.
+It also works inside a restricted container with the repository mounted read-only.
+Host timings alone do not establish performance under the contest CPU limit.
 
 The implementation has four small modules:
 
@@ -100,8 +113,10 @@ image with `research/` mounted read-only and output under `/tmp`. E0 uses
 `stress-41`/`stress-83`; development uses `dev-11`/`dev-29`; final audit uses
 `final-73`/`final-97` once after an approved freeze. A short debug run cannot pass E0.
 
-The [current requirements matrix](reports/v05/REQUIREMENTS.md) maps this revision
-to evidence; [v0.4 acceptance evidence](reports/REQUIREMENTS.md) remains archived. Raw CSVs, JSON registries, and JUnit output are in `reports/`.
+The [historical v0.5 requirements matrix](reports/v05/REQUIREMENTS.md) maps that
+revision to evidence; [v0.4 acceptance evidence](reports/REQUIREMENTS.md) remains
+archived. Current engineering verification is in [the audit](reports/audit/REVIEW.md).
+Raw CSVs, JSON registries, and JUnit output are in `reports/`.
 Thresholds remain provisional hypotheses. The v0.5 comparisons and rejected
 variants are archived under `reports/v05/`; original final seeds were not reused.
 The initial v0.5 audit (19 wins, one chop) is retained under `reports/v05/`.

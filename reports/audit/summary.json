@@ -1,0 +1,94 @@
+{
+  "tests": {
+    "312": {
+      "tests": 384,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "313": {
+      "tests": 384,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "full_matches": 4,
+  "hands": 8000,
+  "independent_seeds": 1,
+  "wins": 4,
+  "referee_errors": 0,
+  "internal_errors": 0,
+  "forfeits": 0,
+  "time_bank_exhaustions": 0,
+  "max_charged_seconds": 0.892936,
+  "max_post_ms": 33.77116299816407,
+  "max_startup_seconds": 1.5183737500046846,
+  "source_hashes_match": true,
+  "qualified_container": {
+    "image": "sha256:1a7dddc8e901b7e744a5bfd295b9679c40e167cba1f80341830ec22642353206",
+    "user": "10001:10001",
+    "network": "none",
+    "readonly_root": true,
+    "nano_cpus": 1000000000,
+    "memory_bytes": 4294967296,
+    "tmpfs": {
+      "/tmp": "rw,nosuid,nodev,size=512m"
+    },
+    "cap_drop": [
+      "ALL"
+    ],
+    "security_options": [
+      "no-new-privileges"
+    ],
+    "pids_limit": 256,
+    "mounts": [
+      {
+        "Destination": "/repo",
+        "RW": false
+      }
+    ]
+  },
+  "matches": [
+    {
+      "opponent": "baseline_random",
+      "verdict": "AGENT1_WIN",
+      "mean_bb_per_deal": 2.8305,
+      "ci": [
+        1.7450550570407561,
+        3.9159449429592437
+      ],
+      "runtime_pass": true
+    },
+    {
+      "opponent": "baseline_calling_station",
+      "verdict": "AGENT1_WIN",
+      "mean_bb_per_deal": 3.2295,
+      "ci": [
+        2.8170988056361708,
+        3.641901194363829
+      ],
+      "runtime_pass": true
+    },
+    {
+      "opponent": "baseline_always_half",
+      "verdict": "AGENT1_WIN",
+      "mean_bb_per_deal": 3.3985,
+      "ci": [
+        2.2033913187343854,
+        4.593608681265614
+      ],
+      "runtime_pass": true
+    },
+    {
+      "opponent": "baseline_always_pot",
+      "verdict": "AGENT1_WIN",
+      "mean_bb_per_deal": 2.8425,
+      "ci": [
+        1.2219330815893323,
+        4.463066918410667
+      ],
+      "runtime_pass": true
+    }
+  ]
+}

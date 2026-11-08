@@ -1,0 +1,24 @@
+﻿{
+    "image":  "sha256:1a7dddc8e901b7e744a5bfd295b9679c40e167cba1f80341830ec22642353206",
+    "user":  "10001:10001",
+    "network":  "none",
+    "readonly_root":  true,
+    "nano_cpus":  1000000000,
+    "memory_bytes":  4294967296,
+    "tmpfs":  {
+                  "/tmp":  "rw,nosuid,nodev,size=512m"
+              },
+    "cap_drop":  [
+                     "ALL"
+                 ],
+    "security_options":  [
+                             "no-new-privileges"
+                         ],
+    "pids_limit":  256,
+    "mounts":  [
+                   {
+                       "Destination":  "/repo",
+                       "RW":  false
+                   }
+               ]
+}
