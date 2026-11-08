@@ -256,3 +256,9 @@ The kernel is memory-latency-bound: random reads and writes into 49 MB of arrays
     python -m pytest -q -m slow tests/test_mccfr.py     # 8-thread convergence, the plan's behaviour tests, SIGTERM + resume
 
 The default tests take about 10 s. The key one trains on a perfect-recall game: three hand classes, the same bucket on every street. On that game the best response is exact. The test asserts that the exploitability falls below a measured threshold, on one thread (falling at every checkpoint) and on two (hogwild). It falls about as 1/sqrt(T): 0.194 bb/hand at 200k iterations, 0.032 at 2M, 0.010 at 20M. Either threading bug the trainer had during development fails the two-thread case (module docstring of `_run_block`).
+
+## Blueprint export (Task 19)
+
+    python -m train.export train_data/mccfr-b400/blueprint_raw.npz data/blueprint.npz
+
+`train/export.py` reads a checkpoint or final output through `mccfr.load_checkpoint` (tree, constants, bucket table and shapes verified), normalizes `avg` over the legal actions and writes it as float16 `[n_info, 4]` in the trainer's own row order (8 bytes per infoset, 51 MB at 400 buckets a street), with the tree/bucket/dataset identity. `bot/strategy.py` (`Blueprint.load`, `.probs(node, bucket)`, `.act(node, bucket, legal, rng, purify=0.1)`) re-verifies all of it against the runtime tree and `data/buckets.npz` and refuses a mismatch; `Blueprint.try_load` / `strategy.load_default` return None instead of raising. The file format is in the `bot/strategy.py` docstring.
