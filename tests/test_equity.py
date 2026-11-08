@@ -1,0 +1,247 @@
+import time
+from itertools import combinations
+
+import numpy as np
+import pytest
+
+import evaluator as ev
+from bot.equity import equity_vs_random, nut_flags, strength_now
+from bot.fasteval import made_now_batch, warmup
+from bot.preflop import preflop_strength
+from bot.timing import TimeManager
+from game import Street
+
+
+def _spot(rng, nb):
+    cards = rng.permutation(36)
+    return [int(c) for c in cards[:5]], [int(c) for c in cards[5:5 + nb]]
+
+
+def _slow_equity(hole, board, iters, rnd):
+    unseen = [c for c in range(36) if c not in hole and c not in board]
+    score = 0.0
+    for _ in range(iters):
+        s = rnd.sample(unseen, 5 + 5 - len(board))
+        opp, full = s[:5], list(board) + s[5:]
+        a, b = ev.omaha_score(hole, full), ev.omaha_score(opp, full)
+        score += 1.0 if a > b else 0.5 if a == b else 0.0
+    return score / iters
+
+
+def _agreement(seed_ref, seed_fast):
+    import random
+    rnd = random.Random(seed_ref)
+    rng = np.random.default_rng(seed_fast)
+    diffs = []
+    for i in range(50):
+        hole, board = _spot(np.random.default_rng(100 + i), (0, 3, 4, 5)[i % 4])
+        fast = equity_vs_random(hole, board, 2000, rng)
+        slow = _slow_equity(hole, board, 4000, rnd)
+        diffs.append(fast - slow)
+    return np.array(diffs)
+
+
+def test_equity_agrees_with_slow_reference():
+    d = _agreement(11, 12)
+    print("max |diff|", np.abs(d).max(), "mean diff", d.mean())
+    assert np.abs(d).max() < 0.05
+    assert abs(d.mean()) < 0.01
+
+
+def test_equity_quick_sanity():
+    rng = np.random.default_rng(0)
+    H = ev.cards_from_str("Kc Ks As Ah Ad")
+    B = ev.cards_from_str("Kh Kd 7c 8c 9d")
+    assert equity_vs_random(H, B, 500, rng) > 0.95
+    e = equity_vs_random(H, [], 500, rng)
+    assert 0.5 < e < 1.0
+
+
+def test_river_equity_is_deterministic_given_rng_seed():
+    hole, board = _spot(np.random.default_rng(5), 5)
+    a = equity_vs_random(hole, board, 256, np.random.default_rng(9))
+    b = equity_vs_random(hole, board, 256, np.random.default_rng(9))
+    assert a == b
+
+
+def test_strength_now_basic():
+    rng = np.random.default_rng(0)
+    H = ev.cards_from_str("Kc Ks As Ah Ad")
+    B = ev.cards_from_str("Kh Kd 7c")
+    assert strength_now(H, B, 300, rng) > 0.9
+    with pytest.raises(ValueError):
+        strength_now(H, [], 10, rng)
+
+
+def test_strength_equals_equity_on_river_statistically():
+    hole, board = _spot(np.random.default_rng(11), 5)
+    s = strength_now(hole, board, 20000, np.random.default_rng(1))
+    e = equity_vs_random(hole, board, 20000, np.random.default_rng(2))
+    assert abs(s - e) < 0.03
+
+
+def test_nut_flag_royal_example():
+    H = ev.cards_from_str("Th 7s 7d 8c 9c")
+    B = ev.cards_from_str("Ah Kh Qh Jh 6c")
+    f = nut_flags(H, B)
+    assert not (f & 1)
+    assert f & 2 == 0
+    assert f & 4
+
+
+def test_nut_flags_bits():
+    assert nut_flags(ev.cards_from_str("As Ah Ad Ac Ks"), []) == 0
+    # royal-ish: we hold Ah Th, board Kh Qh Jh -> straight flush nuts
+    f = nut_flags(ev.cards_from_str("Ah Th 6c 6d 7c"), ev.cards_from_str("Kh Qh Jh"))
+    assert f & 1 and f & 4 and f & 8 and not f & 2
+    # board paired
+    f = nut_flags(ev.cards_from_str("6c 7d 8c 9d Ts"), ev.cards_from_str("Kh Kd 2h".replace("2h", "6h")))
+    assert f & 2
+
+
+def test_nut_flags_matches_bruteforce():
+    rnd = np.random.default_rng(3)
+    for i in range(30):
+        hole, board = _spot(rnd, (3, 4, 5)[i % 3])
+        mine = max(ev.score_five([hole[a], hole[b], *[board[x] for x in t]])
+                   for a, b in combinations(range(5), 2) for t in combinations(range(len(board)), 3))
+        unseen = [c for c in range(36) if c not in hole and c not in board]
+        best = max(ev.score_five([a, b, *[board[x] for x in t]])
+                   for a, b in combinations(unseen, 2) for t in combinations(range(len(board)), 3))
+        assert bool(nut_flags(hole, board) & 1) == (mine >= best)
+
+
+def _timeit(fn, n=300):
+    warmup()
+    for _ in range(30):
+        fn()
+    ts = []
+    for _ in range(n):
+        t = time.perf_counter()
+        fn()
+        ts.append((time.perf_counter() - t) * 1e3)
+    return float(np.median(ts)), float(np.percentile(ts, 99))
+
+
+def test_timing_p99_under_1_5ms_at_128_iters_flop():
+    hole, board = _spot(np.random.default_rng(7), 3)
+    rng = np.random.default_rng(0)
+    med, p99 = _timeit(lambda: equity_vs_random(hole, board, 128, rng))
+    print("equity flop", med, p99)
+    assert p99 < 1.5
+
+
+# ---- exact strength_now by enumerating every opponent hole
+
+_POS5: dict = {}
+
+
+def _exact_strength(hole, board):
+    """(exact strength_now, number of opponent holes): our made hand on this board vs
+    every 5-card hole of the unseen cards, ties counted half."""
+    unseen = np.array([c for c in range(36) if c not in hole and c not in board], dtype=np.int64)
+    pos = _POS5.get(len(unseen))
+    if pos is None:
+        pos = _POS5[len(unseen)] = np.array(list(combinations(range(len(unseen)), 5)), dtype=np.int64)
+    b = np.array([board], dtype=np.int64)
+    theirs = made_now_batch(unseen[pos], b)
+    ours = int(made_now_batch(np.array([hole], dtype=np.int64), b)[0])
+    return float(((ours > theirs).sum() + 0.5 * (ours == theirs).sum()) / len(theirs)), len(theirs)
+
+
+# ---- strength_now is the made hand now, not the runout (audit I6)
+
+@pytest.mark.parametrize("hole,board", [
+    ("Ah Jh Td 9c 7s", "9h 8h Kc"),     # middle pair, plus a wrap and the nut flush draw
+    ("Ah Jh Td 7c 6s", "9h 8h Kc"),     # ace high, plus a wrap and the nut flush draw
+])
+def test_strength_now_is_the_made_hand_not_the_runout(hole, board):
+    H, B = ev.cards_from_str(hole), ev.cards_from_str(board)
+    exact, n_opp = _exact_strength(H, B)
+    assert n_opp == 98_280                       # C(28, 5): every hole the opponent can hold
+    iters = 4000
+    s = strength_now(H, B, iters, np.random.default_rng(5))
+    se = (exact * (1 - exact) / iters) ** 0.5   # an upper bound: ties only shrink the variance
+    assert abs(s - exact) < 4 * se
+    # the draws are worth a lot of equity, and strength_now must not count them
+    e = equity_vs_random(H, B, iters, np.random.default_rng(6))
+    assert s < e - 0.15
+
+
+# ---- zero budget (audit I1): TimeManager.iters() returns 0 by design
+
+@pytest.mark.parametrize("iters", [0, -1, -256])
+@pytest.mark.parametrize("width", [0, 3, 4, 5])
+def test_zero_iters_is_defined(width, iters):
+    hole, board = _spot(np.random.default_rng(40 + width), width)
+    rng = np.random.default_rng(3)
+    state = rng.bit_generator.state
+    e = equity_vs_random(hole, board, iters, rng)
+    assert isinstance(e, float) and 0.0 <= e <= 1.0
+    assert e == equity_vs_random(hole, board, 0, rng)          # deterministic, any iters <= 0
+    if width:
+        s = strength_now(hole, board, iters, rng)
+        assert isinstance(s, float) and 0.0 <= s <= 1.0
+        assert s == strength_now(hole, board, 0, rng)
+    assert rng.bit_generator.state == state                    # nothing was sampled
+
+
+def test_zero_iters_preflop_is_the_preflop_table():
+    for seed in range(5):
+        hole, _ = _spot(np.random.default_rng(seed), 0)
+        assert equity_vs_random(hole, [], 0, np.random.default_rng(0)) == preflop_strength(hole)
+
+
+def test_time_manager_zero_budget_feeds_the_equity_api():
+    tm = TimeManager()
+    tm.add(7.0)                              # past the hard stop (6 s of the 8 s bank)
+    n = tm.iters(pot=60, street=Street.FLOP, hand_index=900)
+    assert n == 0
+    rng = np.random.default_rng(0)
+    for width in (0, 3, 4, 5):
+        hole, board = _spot(np.random.default_rng(width), width)
+        assert 0.0 <= equity_vs_random(hole, board, n, rng) <= 1.0
+        if width:
+            assert 0.0 <= strength_now(hole, board, n, rng) <= 1.0
+
+
+def test_zero_iters_estimate_tracks_exact_strength():
+    # The no-budget estimate must still rank made hands: pooled over flop, turn and
+    # river spots it stays close to, and strongly correlated with, the exact strength.
+    rng = np.random.default_rng(77)
+    est, exact = [], []
+    for width, n in ((3, 12), (4, 8), (5, 8)):
+        for _ in range(n):
+            hole, board = _spot(rng, width)
+            est.append(strength_now(hole, board, 0, rng))
+            exact.append(_exact_strength(hole, board)[0])
+    est, exact = np.array(est), np.array(exact)
+    print("MAE", np.abs(est - exact).mean(), "corr", np.corrcoef(est, exact)[0, 1])
+    assert np.abs(est - exact).mean() < 0.15
+    assert np.corrcoef(est, exact)[0, 1] > 0.8
+
+
+def test_zero_iters_ranks_hands_on_one_board():
+    # Exact strengths on this river: royal flush 1.000, trip kings 0.678, aces 0.011.
+    board = ev.cards_from_str("Kh Qh Jh 7c 6d")
+    royal = strength_now(ev.cards_from_str("Ah Th 6c 7d 8s"), board, 0, None)
+    trips = strength_now(ev.cards_from_str("Kc Kd 9s 8d 6s"), board, 0, None)
+    pair = strength_now(ev.cards_from_str("6c 8d 9d As Ad"), board, 0, None)
+    assert royal > 0.95 and pair < 0.5 and royal > trips > pair
+
+
+def test_zero_budget_is_cheaper_than_the_smallest_rollout():
+    hole, board = _spot(np.random.default_rng(7), 3)
+    rng = np.random.default_rng(0)
+    warmup()
+    for _ in range(50):
+        strength_now(hole, board, 0, rng), equity_vs_random(hole, board, 16, rng)
+    zero, mc16 = [], []
+    for _ in range(300):
+        t = time.perf_counter()
+        equity_vs_random(hole, board, 0, rng)
+        zero.append(time.perf_counter() - t)
+        t = time.perf_counter()
+        equity_vs_random(hole, board, 16, rng)
+        mc16.append(time.perf_counter() - t)
+    assert np.median(zero) < 0.75 * np.median(mc16)

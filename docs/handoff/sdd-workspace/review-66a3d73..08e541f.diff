@@ -1,0 +1,1017 @@
+# Review package: 66a3d73..08e541f
+
+## Commits
+08e541f feat(bot): range-aware heuristic v1
+7821d0c feat(sim): heuristic evaluation bot
+0269604 feat(bot): features and parameterized heuristic policy
+
+## Files changed
+ bot/features.py             | 154 ++++++++++++++++++++
+ bot/heuristic.py            | 150 +++++++++++++++++++
+ sim/heuristic_bot.py        | 150 +++++++++++++++++++
+ tests/test_heuristic.py     | 345 ++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_heuristic_bot.py |  66 +++++++++
+ train/fit_range_model.py    |  99 +++++++++++++
+ 6 files changed, 964 insertions(+)
+
+## Diff
+diff --git a/bot/features.py b/bot/features.py
+new file mode 100644
+index 0000000..cb5652f
+--- /dev/null
++++ b/bot/features.py
+@@ -0,0 +1,154 @@
++"""Decision features for the heuristic policy (and the layers built on it later).
++
++compute_features(obs, iters, rng) turns an Observation into a frozen Features record:
++- preflop: eq = now = the preflop table value (equity vs a random hand, 3,000 rollouts
++  per hand class offline), nut = 0;
++- postflop: eq = equity_vs_random and now = strength_now with `iters` rollouts each (on
++  the river they are the same quantity, so it is computed once), nut = nut_flags.
++`iters` comes from the caller's time manager. iters <= 0 means no Monte Carlo: both use
++bot.equity's cheap deterministic estimate (then eq == now) and rng is left untouched.
++
++Module state is read-only; everything per-half lives with the caller.
++"""
++
++from __future__ import annotations
++
++import math
++from dataclasses import dataclass
++
++import numpy as np
++
++from bot import equity, preflop
++from game import Action, Observation, Street
++
++_RAISES = (Action.RAISE_HALF, Action.RAISE_POT)
++
++# Range model: P(we win at showdown | our equity vs random `eq`, our nut bits, and an
++# opponent whose own equity vs random is >= t). Logistic per street on a grid of t:
++#   logit P = a + b * logit(eq) + c * [nuts now] + d * [flush possible, not the nuts]
++# Fitted offline (python -m train.fit_range_model --spots 100000, seed 20261107) on
++# 100,000 random spots per street, both equities from 128 rollouts.
++# Rows are t = 0.0, 0.1, ..., 0.9; t is interpolated linearly.
++_RANGE_COEF = (
++    # FLOP
++    ((-0.01, 0.90, 0.22, 0.05), (-0.02, 0.90, 0.21, 0.05), (-0.04, 0.91, 0.21, 0.03),
++     (-0.13, 0.90, 0.19, -0.17), (-0.36, 0.89, 0.12, -0.84), (-0.73, 0.91, 0.20, -1.22),
++     (-1.15, 0.94, 0.42, -1.16), (-1.59, 0.97, 0.61, -1.24), (-2.05, 0.94, 0.80, -1.12),
++     (-2.87, 0.92, 0.61, -0.91)),
++    # TURN
++    ((-0.01, 0.94, 0.21, -0.03), (-0.02, 0.94, 0.21, -0.04), (-0.10, 0.95, 0.19, -0.19),
++     (-0.30, 0.98, 0.19, -0.52), (-0.67, 1.03, 0.25, -0.83), (-1.12, 1.09, 0.41, -0.89),
++     (-1.58, 1.12, 0.67, -0.96), (-1.97, 1.07, 1.03, -1.14), (-2.41, 0.95, 1.45, -1.11),
++     (-3.04, 0.83, 1.66, -1.30)),
++    # RIVER
++    ((0.01, 0.98, 0.61, 0.04), (-0.39, 1.20, -0.13, 0.04), (-0.82, 1.38, -0.62, 0.03),
++     (-1.32, 1.54, -0.93, 0.04), (-1.82, 1.66, -1.12, -0.05), (-2.58, 1.80, -1.25, -0.02),
++     (-3.35, 1.93, -1.20, -0.07), (-4.68, 2.15, -1.21, -0.07), (-5.84, 2.27, -0.81, -0.21),
++     (-7.07, 2.07, 0.45, -0.35)),
++)
++
++
++def range_equity(street: int, eq: float, nut: int, t: float) -> float:
++    """Equity vs an opponent range {equity vs random >= t} (postflop streets 1..3).
++
++    t is clipped to [0, 0.9]; eq to [0.005, 0.995] before the logit.
++    """
++    rows = _RANGE_COEF[int(street) - 1]
++    k = min(max(t, 0.0), 0.9) * 10.0
++    i = min(int(k), 8)
++    w = k - i
++    lo, hi = rows[i], rows[i + 1]
++    a, b, c, d = (lo[j] + w * (hi[j] - lo[j]) for j in range(4))
++    e = min(max(eq, 0.005), 0.995)
++    x = a + b * math.log(e / (1.0 - e))
++    if nut & 1:
++        x += max(c, 0.0)      # never below a non-nut hand of the same eq (river fit < 0: ties)
++    elif nut & 4:
++        x += d
++    return 1.0 / (1.0 + math.exp(-x))
++
++
++@dataclass(frozen=True)
++class Features:
++    """What the heuristic decides from.
++
++    street                  the betting round
++    pre                     preflop strength of our hole (any street); None if unavailable
++    eq                      equity vs a random hand (preflop: the table value)
++    now                     strength of our made hand vs random hands on this board
++    nut                     bot.equity.nut_flags bits (0 preflop): 1 nuts now, 2 paired
++                            board, 4 flush possible, 8 ace-flush holding
++    spr                     effective stack behind after matching the bet, over the pot
++                            after matching it
++    pot_odds                share of the final pot we put in by calling (0 when free)
++    in_position             we are the button, so we act last after the flop
++    opp_raised_this_street  opponent bets/raises on this street
++
++    Added (all default to "unknown/none" so the brief's constructor still works):
++    opp_raises_before       opponent bets/raises on earlier streets of this hand
++    my_raised_this_street   our own bets/raises on this street
++    facing_frac             to_call / pot before the opponent's last bet (0 when free)
++    iters                   rollouts used for eq and now (0: deterministic estimate)
++    """
++
++    street: Street
++    pre: float | None
++    eq: float
++    now: float
++    nut: int
++    spr: float
++    pot_odds: float
++    in_position: bool
++    opp_raised_this_street: int
++    opp_raises_before: int = 0
++    my_raised_this_street: int = 0
++    facing_frac: float = 0.0
++    iters: int = 0
++
++
++def _preflop_value(hole) -> float | None:
++    try:
++        return preflop.preflop_strength(hole)
++    except Exception:          # missing/corrupt table or an impossible hole: no prior
++        return None
++
++
++def compute_features(obs: Observation, iters: int, rng: np.random.Generator) -> Features:
++    """Features for obs. Raises ValueError only for a board that is not 0, 3, 4 or 5 cards."""
++    hole, board = obs.hole_cards, obs.board
++    pre = _preflop_value(hole)
++    nb = len(board)
++    if nb == 0:
++        eq = now = pre if pre is not None else 0.5
++        nut = 0
++        iters = 0
++    elif nb in (3, 4, 5):
++        iters = max(int(iters), 0)
++        eq = equity.equity_vs_random(hole, board, iters, rng)
++        now = eq if (iters == 0 or nb == 5) else equity.strength_now(hole, board, iters, rng)
++        nut = equity.nut_flags(hole, board)
++    else:
++        raise ValueError(f"board must have 0, 3, 4 or 5 cards, got {nb}")
++
++    street = obs.street
++    opp_now = opp_before = mine = 0
++    for a in obs.action_history:
++        if a.action in _RAISES:
++            if a.is_me:
++                mine += a.street == street
++            elif a.street == street:
++                opp_now += 1
++            else:
++                opp_before += 1
++
++    pot = max(obs.pot, 1)
++    call = min(max(obs.to_call, 0), max(obs.my_stack, 0))
++    behind = min(obs.my_stack - call, obs.opp_stack)
++    spr = max(behind, 0) / (pot + call)
++    pot_odds = call / (pot + call) if call > 0 else 0.0
++    before_bet = pot - obs.to_call
++    facing = obs.to_call / before_bet if obs.to_call > 0 and before_bet > 0 else 0.0
++    return Features(street=street, pre=pre, eq=float(eq), now=float(now), nut=int(nut),
++                    spr=float(spr), pot_odds=float(pot_odds), in_position=bool(obs.is_button),
++                    opp_raised_this_street=opp_now, opp_raises_before=opp_before,
++                    my_raised_this_street=mine, facing_frac=float(facing), iters=iters)
+diff --git a/bot/heuristic.py b/bot/heuristic.py
+new file mode 100644
+index 0000000..f3afb32
+--- /dev/null
++++ b/bot/heuristic.py
+@@ -0,0 +1,150 @@
++"""Parameterized heuristic policy: Features + HeuristicParams -> a legal Action.
++
++Preflop: raise first in at open_min (pot-sized at threebet_min), re-raise at threebet_min,
++otherwise call when strength minus a per-raise range discount beats the pot odds.
++
++Postflop, facing a bet: the opponent is modelled as betting with equity >= bet_range
++(+ raise_step per further raise), and our effective equity mixes the range model
++(bot.features.range_equity, weight range_weight) with the brief's linear form
++eq - range_discount * opp_raises; nonnut_penalty applies on paired/flush boards without
++the nuts. Raise above value_raise, call above pot odds + call_margin, else fold.
++Unopened: bet pot/half above value_raise, half above thin_value (lower in position after a
++check: such ranges are capped), and in position bluff with probability bluff_freq.
++Never folds when free; never folds the nuts on the river (raises them when it can).
++
++Module state is read-only; randomness comes only from the caller's numpy Generator.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++import numpy as np
++
++from bot.features import Features, range_equity
++from game import Action, Observation, Street
++
++FOLD, CALL, HALF, POT = Action.FOLD, Action.CHECK_CALL, Action.RAISE_HALF, Action.RAISE_POT
++
++
++@dataclass(frozen=True)
++class HeuristicParams:
++    """Tunable thresholds (equities are vs a random hand, in [0, 1]).
++
++    open_min        preflop: raise first in (button) at or above this strength
++    threebet_min    preflop: re-raise a raise at or above this strength
++    call_margin     call when effective equity > pot odds + call_margin
++    range_discount  per opponent raise this street, subtracted from equity (flop, turn, river)
++    value_raise     raise when effective equity exceeds this (flop, turn, river)
++    pot_vs_half_cut RAISE_POT above this effective equity, else RAISE_HALF
++    bluff_freq      bet this often with a hand too weak to value-bet, in position when checked to
++    nonnut_penalty  subtracted when the board is paired or flush-possible and we lack the nuts
++
++    Added:
++    range_weight    facing a bet postflop, weight of the range model (equity vs an opponent
++                    whose equity is >= bet_range); the rest keeps the linear discount. 0
++                    gives the brief's formula.
++    bet_range       assumed equity floor of the opponent's first bet/raise of a street
++                    (flop, turn, river)
++    raise_step      added to that floor per further raise this street
++    thin_value      unopened: bet half pot above this effective equity (flop, turn, river)
++    pre_discount    preflop: subtracted from our strength facing one raise; facing the
++                    k-th raise of the street, pre_discount * (1 + 0.5 * (k - 1))
++    ip_thin_shift   in position after the opponent checks: thin_value lowered by this
++    """
++
++    open_min: float = 0.44
++    threebet_min: float = 0.53
++    call_margin: float = 0.02
++    range_discount: tuple = (0.10, 0.08, 0.06)
++    value_raise: tuple = (0.70, 0.75, 0.80)
++    pot_vs_half_cut: float = 0.85
++    bluff_freq: float = 0.10
++    nonnut_penalty: float = 0.08
++    range_weight: float = 0.7
++    bet_range: tuple = (0.50, 0.55, 0.55)
++    raise_step: float = 0.10
++    thin_value: tuple = (0.62, 0.64, 0.66)
++    pre_discount: float = 0.07
++    ip_thin_shift: float = 0.06
++
++
++def _legal(obs: Observation, want: Action) -> Action:
++    """want if legal; a raise falls back to the other raise size, then to check/call.
++    Never folds when nothing is owed."""
++    legal = obs.legal_actions
++    if want == FOLD and obs.to_call <= 0:
++        want = CALL
++    if want in legal:
++        return want
++    if want in (HALF, POT):
++        other = POT if want == HALF else HALF
++        if other in legal:
++            return other
++    if CALL in legal:
++        return CALL
++    for a in legal:
++        if a != FOLD or obs.to_call > 0:
++            return a
++    return CALL
++
++
++def _preflop(obs: Observation, f: Features, p: HeuristicParams, can_raise: bool) -> Action:
++    e = f.eq
++    k = obs.raises_this_street                 # voluntary raises so far (blinds excluded)
++    if obs.to_call <= 0:                       # big blind, the button limped
++        if can_raise and e >= p.threebet_min:
++            return HALF
++        return CALL
++    if k == 0:                                 # button, first in
++        if can_raise and e >= p.open_min:
++            return POT if e >= p.threebet_min else HALF
++        return CALL if e > f.pot_odds + p.call_margin else FOLD
++    if can_raise and e >= p.threebet_min:
++        return POT
++    # Each raise narrows the raiser's range, by less every time (measured: top 40% of
++    # hands costs us ~0.065 equity, top 15% ~0.10, top 5% ~0.14).
++    eff = e - p.pre_discount * (1.0 + 0.5 * (k - 1))
++    return CALL if eff > f.pot_odds + p.call_margin else FOLD
++
++
++def _postflop(obs: Observation, f: Features, p: HeuristicParams, rng: np.random.Generator,
++              can_raise: bool) -> Action:
++    i = int(f.street) - 1
++    e = f.eq
++    r = f.opp_raised_this_street
++    nonnut = bool(f.nut & 0b110) and not (f.nut & 1)
++    river_nuts = f.street == Street.RIVER and bool(f.nut & 1)
++    if obs.to_call > 0:
++        if river_nuts:
++            return POT if can_raise else CALL  # never fold a hand that cannot lose
++        t = p.bet_range[i] + p.raise_step * max(obs.raises_this_street - 1, 0)
++        linear = e - p.range_discount[i] * r
++        w = p.range_weight
++        eff = w * range_equity(f.street, e, f.nut, t) + (1.0 - w) * linear
++        if nonnut:
++            eff -= p.nonnut_penalty
++        if can_raise and eff > p.value_raise[i]:
++            return POT if eff > p.pot_vs_half_cut else HALF
++        return CALL if eff > f.pot_odds + p.call_margin else FOLD
++    eff = 1.0 if river_nuts else e - (p.nonnut_penalty if nonnut else 0.0)
++    if can_raise:
++        if eff > p.value_raise[i]:
++            return POT if eff > p.pot_vs_half_cut else HALF
++        if eff > p.thin_value[i] - (p.ip_thin_shift if f.in_position else 0.0):
++            return HALF
++        if f.in_position and rng.random() < p.bluff_freq:
++            return HALF
++    return CALL
++
++
++def heuristic_action(obs: Observation, feats: Features, params: HeuristicParams,
++                     rng: np.random.Generator, opp=None) -> Action:
++    """A legal action for obs. `opp` (an opponent model, Task 13) is accepted and unused."""
++    legal = obs.legal_actions
++    can_raise = HALF in legal or POT in legal
++    if feats.street == Street.PREFLOP:
++        want = _preflop(obs, feats, params, can_raise)
++    else:
++        want = _postflop(obs, feats, params, rng, can_raise)
++    return _legal(obs, want)
+diff --git a/sim/heuristic_bot.py b/sim/heuristic_bot.py
+new file mode 100644
+index 0000000..621c740
+--- /dev/null
++++ b/sim/heuristic_bot.py
+@@ -0,0 +1,150 @@
++"""Dev-only evaluation bot for the Task 10 heuristic (not the shipped PolicyBot).
++
++HeuristicBot(params) is BotLike and picklable (functools.partial or the class itself is a
++factory). Per half it keeps a TimeManager and a numpy Generator in `memory`; each decision
++asks the manager for iters, then runs compute_features + heuristic_action.
++
++The module also works as a bot file (`--candidate sim/heuristic_bot.py`, default params).
++
++Evaluation CLI (repo root):
++  .venv/bin/python -m sim.heuristic_bot --opponents train --seeds 3 --deals 1000 --workers 4
++  [--params '{"bluff_freq": 0.05}'] [--out results.json]
++"""
++
++from __future__ import annotations
++
++import argparse
++import dataclasses
++import functools
++import json
++import os
++import sys
++import time
++
++import numpy as np
++
++from bot import equity, preflop
++from bot.features import compute_features
++from bot.heuristic import HeuristicParams, heuristic_action
++from bot.timing import TimeManager
++from game import Action, default_action
++
++RNG_SEED = 20261107
++
++
++class HeuristicBot:
++    """compute_features + heuristic_action, with Monte Carlo sized by a TimeManager."""
++
++    def __init__(self, params: HeuristicParams | None = None) -> None:
++        self.params = params if params is not None else HeuristicParams()
++        equity.warmup()            # the factory call is untimed, like a fresh process's startup
++        preflop.load_preflop()
++
++    def new_half(self, config, memory: dict) -> None:
++        memory["tm"] = TimeManager(bank_s=config.time_bank_seconds, hands=config.num_hands)
++        memory["rng"] = np.random.default_rng(RNG_SEED)
++
++    def choose_action(self, obs, memory: dict) -> Action:
++        tm = memory["tm"]
++        tm.begin()
++        try:
++            rng = memory["rng"]
++            feats = compute_features(obs, tm.iters(obs.pot, obs.street, obs.hand_index), rng)
++            a = heuristic_action(obs, feats, self.params, rng)
++            return a if a in obs.legal_actions else default_action(obs.to_call)
++        finally:
++            tm.end()
++
++    def on_hand_end(self, result, memory: dict) -> None:
++        return None
++
++
++# --- bot-file interface (default params), state in memory only ---------------------------
++
++def new_half(config, memory: dict) -> None:
++    memory["bot"] = HeuristicBot()
++    memory["bot"].new_half(config, memory)
++
++
++def choose_action(obs, memory: dict) -> Action:
++    return memory["bot"].choose_action(obs, memory)
++
++
++def on_hand_end(result, memory: dict) -> None:
++    return None
++
++
++# --- evaluation CLI ---------------------------------------------------------------------
++
++def make_params(overrides: dict | None) -> HeuristicParams:
++    """HeuristicParams with JSON overrides (lists become tuples)."""
++    kw = {k: tuple(v) if isinstance(v, list) else v for k, v in (overrides or {}).items()}
++    return dataclasses.replace(HeuristicParams(), **kw)
++
++
++def summarize(rep) -> list:
++    """One row per opponent from a FocusReport."""
++    rows = []
++    for o, by_seed in rep.matches.items():
++        ms = [by_seed[s] for s in sorted(by_seed)]
++        halves = [h for m in ms for h in m.halves]
++        rows.append({
++            "opponent": o,
++            "mean_bb": float(np.mean([m.mean_bb for m in ms])),
++            "seeds": [{"seed": s, "mean_bb": m.mean_bb, "ci": [m.ci_low, m.ci_high],
++                       "verdict": m.verdict} for s, m in zip(sorted(by_seed), ms)],
++            "W": sum(m.verdict == "A" for m in ms), "L": sum(m.verdict == "B" for m in ms),
++            "C": sum(m.verdict == "CHOP" for m in ms),
++            "max_bank": max(h.bank_a for h in halves),
++            "errors": sum(h.errors_a for h in halves),
++            "max_call_ms": 1e3 * max(h.max_call_a for h in halves),
++        })
++    return rows
++
++
++def print_rows(rows: list) -> None:
++    print(f"{'opponent':22s} {'bb/deal':>8s}  {'W/L/C':>5s}  {'bank':>5s} {'err':>3s}  per-seed [ci]")
++    for r in rows:
++        seeds = "  ".join(f"{s['mean_bb']:+.2f}[{s['ci'][0]:+.2f},{s['ci'][1]:+.2f}]{s['verdict'][0]}"
++                          for s in r["seeds"])
++        print(f"{r['opponent']:22s} {r['mean_bb']:+8.3f}  {r['W']}/{r['L']}/{r['C']}  "
++              f"{r['max_bank']:5.2f} {r['errors']:3d}  {seeds}")
++    print(f"mean bb/deal {np.mean([r['mean_bb'] for r in rows]):+.3f}  "
++          f"W/L/C {sum(r['W'] for r in rows)}/{sum(r['L'] for r in rows)}/{sum(r['C'] for r in rows)}  "
++          f"max bank {max(r['max_bank'] for r in rows):.2f} s  errors {sum(r['errors'] for r in rows)}")
++
++
++def main(argv=None) -> int:
++    from sim.tournament import focus_eval, select_opponents
++    from sim.opponents import ZOO
++    ap = argparse.ArgumentParser(prog="sim.heuristic_bot")
++    ap.add_argument("--opponents", default="train",
++                    help="train | holdout | all | comma-separated zoo names")
++    ap.add_argument("--seeds", type=int, default=3)
++    ap.add_argument("--seed-prefix", default="s")
++    ap.add_argument("--deals", type=int, default=1000)
++    ap.add_argument("--workers", type=int, default=4)
++    ap.add_argument("--params", default="{}", help="JSON overrides of HeuristicParams")
++    ap.add_argument("--out")
++    args = ap.parse_args(argv)
++    if args.opponents in ("train", "holdout", "all"):
++        opps = select_opponents(args.opponents)
++    else:
++        opps = {n: ZOO[n] for n in args.opponents.split(",")}
++    params = make_params(json.loads(args.params))
++    seeds = [f"{args.seed_prefix}{i}" for i in range(1, args.seeds + 1)]
++    t0 = time.time()
++    rep = focus_eval(functools.partial(HeuristicBot, params), opps, seeds, args.deals,
++                     args.workers)
++    rows = summarize(rep)
++    print_rows(rows)
++    print(f"({time.time() - t0:.0f} s, load {os.getloadavg()[0]:.1f})")
++    if args.out:
++        with open(args.out, "w") as fh:
++            json.dump({"params": dataclasses.asdict(params), "seeds": seeds,
++                       "deals": args.deals, "rows": rows}, fh, indent=1)
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/tests/test_heuristic.py b/tests/test_heuristic.py
+new file mode 100644
+index 0000000..f249b15
+--- /dev/null
++++ b/tests/test_heuristic.py
+@@ -0,0 +1,345 @@
++"""Task 10: decision features and the parameterized heuristic policy."""
++
++import dataclasses
++import math
++import pickle
++import random
++import time
++
++import numpy as np
++import pytest
++
++from bot.features import Features, compute_features
++from bot.heuristic import HeuristicParams, heuristic_action
++from evaluator import cards_from_str
++from game import (Action, Deal, Game, Observation, ObservedAction, Street,
++                  button_for_deal, make_deal)
++
++A = Action
++RAISES = (A.RAISE_HALF, A.RAISE_POT)
++
++# Parameter sets that push every branch: the defaults, one that wants to raise and
++# bluff with anything, and one that wants to fold anything that costs chips.
++AGGRESSIVE = HeuristicParams(open_min=0.0, threebet_min=0.0, call_margin=-1.0,
++                             range_discount=(0.0, 0.0, 0.0), value_raise=(0.0, 0.0, 0.0),
++                             pot_vs_half_cut=0.5, bluff_freq=1.0, nonnut_penalty=0.0)
++PASSIVE = HeuristicParams(open_min=2.0, threebet_min=2.0, call_margin=1.0,
++                          range_discount=(0.5, 0.5, 0.5), value_raise=(2.0, 2.0, 2.0),
++                          pot_vs_half_cut=2.0, bluff_freq=0.0, nonnut_penalty=0.5)
++PARAM_SETS = (HeuristicParams(), AGGRESSIVE, PASSIVE)
++
++
++def _drive(deal: Deal, button: int, actions) -> Game:
++    """A game advanced by a fixed action list (each must be legal)."""
++    g = Game(deal, button, hand_index=0)
++    for a in actions:
++        g.apply(a)
++    return g
++
++
++def _deal(hero: str, villain: str, board: str) -> Deal:
++    return Deal(hole_cards=(tuple(sorted(cards_from_str(hero))),
++                            tuple(sorted(cards_from_str(villain)))),
++                board=tuple(cards_from_str(board)))
++
++
++def _observations(n: int, seed: int):
++    """n observations from games of the heuristic (default params) vs a random bot.
++
++    Both seats' observations are collected; the hero seat alternates every deal.
++    """
++    rnd = random.Random(seed)
++    rng = np.random.default_rng(seed)
++    params = HeuristicParams()
++    out = []
++    d = 0
++    while len(out) < n:
++        g = Game(make_deal(f"t10:{seed}", d), button_for_deal(d), hand_index=d)
++        hero = d % 2
++        while not g.is_terminal:
++            seat = g.to_act
++            obs = g.observation(seat)
++            out.append(obs)
++            if seat == hero:
++                a = heuristic_action(obs, compute_features(obs, 0, rng), params, rng)
++                assert a in obs.legal_actions
++            else:
++                a = rnd.choice(obs.legal_actions)
++            g.apply(a)
++        d += 1
++    return out[:n]
++
++
++@pytest.fixture(scope="module")
++def obs10k():
++    return _observations(10_000, seed=7)
++
++
++def test_heuristic_params_defaults_are_the_briefs():
++    p = HeuristicParams()
++    assert (p.open_min, p.threebet_min, p.call_margin) == (0.44, 0.53, 0.02)
++    assert p.range_discount == (0.10, 0.08, 0.06)
++    assert p.value_raise == (0.70, 0.75, 0.80)
++    assert (p.pot_vs_half_cut, p.bluff_freq, p.nonnut_penalty) == (0.85, 0.10, 0.08)
++    with pytest.raises(dataclasses.FrozenInstanceError):
++        p.open_min = 0.5
++    assert pickle.loads(pickle.dumps(p)) == p
++
++
++def test_always_legal_on_10k_random_observations(obs10k):
++    assert len(obs10k) == 10_000
++    streets = {o.street for o in obs10k}
++    assert streets == set(Street)
++    rng = np.random.default_rng(3)
++    for i, obs in enumerate(obs10k):
++        feats = compute_features(obs, (0, 16)[i % 2], rng)
++        for params in PARAM_SETS:
++            a = heuristic_action(obs, feats, params, rng)
++            assert a in obs.legal_actions, (obs, params, a)
++
++
++def test_never_folds_when_free(obs10k):
++    rng = np.random.default_rng(4)
++    free = [o for o in obs10k if o.to_call == 0]
++    assert len(free) > 1000
++    for obs in free:
++        feats = compute_features(obs, 0, rng)
++        for params in PARAM_SETS:
++            assert heuristic_action(obs, feats, params, rng) != A.FOLD
++    # A malformed observation that lists FOLD although nothing is owed: still no fold.
++    g = _drive(make_deal("free", 0), 0, [A.CHECK_CALL])           # SB limps, BB to act
++    obs = g.observation(g.to_act)
++    assert obs.to_call == 0
++    bad = dataclasses.replace(obs, legal_actions=(A.FOLD,) + obs.legal_actions)
++    for params in PARAM_SETS:
++        for k in range(20):
++            feats = compute_features(bad, 0, rng)
++            assert heuristic_action(bad, feats, params, np.random.default_rng(k)) != A.FOLD
++
++
++def _corner_observations():
++    """Review Focus 2 corners, as (label, observation)."""
++    out = []
++    deal = make_deal("corners", 3)
++    # Preflop pot-raise war: 6 -> 18 -> 54 -> 80 (all-in, below min_raise_to 90).
++    g = _drive(deal, 0, [A.RAISE_POT, A.RAISE_POT, A.RAISE_POT])
++    o = g.observation(g.to_act)
++    assert o.raise_to[A.RAISE_POT] == 80 < o.min_raise_to
++    out.append(("all-in raise_to below min_raise_to (preflop)", o))
++    g.apply(A.RAISE_POT)
++    o = g.observation(g.to_act)
++    assert o.to_call >= o.my_stack and o.opp_stack == 0 and o.legal_actions == (A.FOLD, A.CHECK_CALL)
++    out.append(("to_call >= my_stack, opponent all-in, raises capped", o))
++    # Flop: bet, raise, all-in re-raise below min_raise_to, then the caller's spot.
++    g = _drive(deal, 0, [A.RAISE_POT, A.CHECK_CALL, A.RAISE_POT, A.RAISE_POT])
++    o = g.observation(g.to_act)
++    assert o.street == Street.FLOP and o.raise_to[A.RAISE_HALF] < o.min_raise_to
++    out.append(("all-in raise_to below min_raise_to (flop)", o))
++    g.apply(A.RAISE_HALF)
++    o = g.observation(g.to_act)
++    assert o.to_call >= o.my_stack and o.opp_stack == 0 and A.RAISE_HALF not in o.legal_actions
++    out.append(("to_call >= my_stack on the flop, opponent all-in", o))
++    # Opponent all-in for less than our bet: only CHECK_CALL is legal (not reachable with
++    # equal stacks, but a retuned config or a corrupt observation could send it).
++    base = g.observation(g.to_act)
++    only = dataclasses.replace(base, to_call=0, my_bet=base.opp_bet, opp_stack=0,
++                               legal_actions=(A.CHECK_CALL,), raise_to={})
++    out.append(("legal_actions == (CHECK_CALL,)", only))
++    river = _drive(deal, 1, [A.CHECK_CALL, A.CHECK_CALL] + [A.CHECK_CALL] * 4)
++    o = river.observation(river.to_act)
++    out.append(("legal_actions == (CHECK_CALL,) on the river",
++                dataclasses.replace(o, legal_actions=(A.CHECK_CALL,), raise_to={})))
++    # A short stack facing a bet bigger than itself, with only FOLD/CHECK_CALL legal.
++    out.append(("short stack, to_call > my_stack",
++                dataclasses.replace(o, to_call=30, opp_bet=30, my_stack=12, opp_stack=50,
++                                    legal_actions=(A.FOLD, A.CHECK_CALL), raise_to={})))
++    return out
++
++
++def test_all_in_corners_are_legal():
++    corners = _corner_observations()
++    assert len(corners) == 7
++    for label, obs in corners:
++        for iters in (0, 32):
++            for seed in range(10):
++                rng = np.random.default_rng(seed)
++                feats = compute_features(obs, iters, rng)
++                assert all(math.isfinite(x) for x in (feats.eq, feats.now, feats.spr, feats.pot_odds))
++                for params in PARAM_SETS:
++                    a = heuristic_action(obs, feats, params, rng)
++                    assert a in obs.legal_actions, (label, params, a)
++
++
++def _river_nuts_facing_bet(raises_by_villain: int):
++    """Hero (BB, out of position) holds the nuts on the river and faces a bet or raise."""
++    deal = _deal("Th 9h 7s 7d 6s", "Ac Kc 8d 8s 9c", "Ah Kh Qh Jh 6c")
++    acts = [A.CHECK_CALL, A.CHECK_CALL,          # preflop: SB limps, BB checks
++            A.CHECK_CALL, A.CHECK_CALL,          # flop
++            A.CHECK_CALL, A.CHECK_CALL]          # turn
++    if raises_by_villain == 1:
++        acts += [A.CHECK_CALL, A.RAISE_POT]      # river: hero checks, villain bets pot
++    else:
++        acts += [A.RAISE_HALF, A.RAISE_POT, A.RAISE_HALF, A.RAISE_POT]   # bet, raise, 3-bet, 4-bet
++    g = _drive(deal, 1, acts)                    # seat 1 is the button, hero is seat 0
++    obs = g.observation(g.to_act)
++    assert g.to_act == 0 and obs.street == Street.RIVER and obs.to_call > 0
++    return obs
++
++
++@pytest.mark.parametrize("raises_by_villain", [1, 2])
++def test_calls_with_nuts_on_river(raises_by_villain):
++    obs = _river_nuts_facing_bet(raises_by_villain)
++    for iters in (0, 16, 128):
++        feats = compute_features(obs, iters, np.random.default_rng(iters))
++        assert feats.nut & 1
++        assert feats.opp_raised_this_street == raises_by_villain
++        for params in PARAM_SETS:
++            assert heuristic_action(obs, feats, params, np.random.default_rng(1)) != A.FOLD
++
++
++def test_raises_with_nuts_on_river_when_allowed():
++    obs = _river_nuts_facing_bet(1)
++    assert A.RAISE_POT in obs.legal_actions
++    feats = compute_features(obs, 64, np.random.default_rng(0))
++    assert heuristic_action(obs, feats, HeuristicParams(), np.random.default_rng(0)) in RAISES
++
++
++def _street_observation(street: Street) -> Observation:
++    deal = make_deal("streets", 11)
++    acts = {Street.PREFLOP: [], Street.FLOP: [A.CHECK_CALL, A.CHECK_CALL],
++            Street.TURN: [A.CHECK_CALL] * 4, Street.RIVER: [A.CHECK_CALL] * 6}[street]
++    g = _drive(deal, 0, acts)
++    obs = g.observation(g.to_act)
++    assert obs.street == street
++    return obs
++
++
++@pytest.mark.parametrize("street", list(Street))
++def test_compute_features_iters_zero(street):
++    obs = _street_observation(street)
++    rng = np.random.default_rng(0)
++    state = rng.bit_generator.state
++    feats = compute_features(obs, 0, rng)
++    assert rng.bit_generator.state == state            # iters == 0 draws nothing
++    assert isinstance(feats, Features) and feats.street == street
++    for x in (feats.eq, feats.now, feats.spr, feats.pot_odds):
++        assert math.isfinite(x)
++    assert 0.0 <= feats.eq <= 1.0 and 0.0 <= feats.now <= 1.0
++    assert feats.pre is not None and 0.0 < feats.pre < 1.0
++    if street == Street.PREFLOP:
++        assert feats.eq == feats.pre and feats.nut == 0
++    a = heuristic_action(obs, feats, HeuristicParams(), rng)
++    assert a in obs.legal_actions
++    ts = []
++    for _ in range(200):
++        t0 = time.perf_counter()
++        heuristic_action(obs, compute_features(obs, 0, rng), HeuristicParams(), rng)
++        ts.append(time.perf_counter() - t0)
++    assert float(np.median(ts)) < 0.0005                # generous: ~0.15 ms measured
++
++
++def test_feature_values_from_history():
++    deal = make_deal("vals", 2)
++    # Button seat 0 raises pot (to 6), BB 3-bets pot (to 18): button faces 12 into 24.
++    g = _drive(deal, 0, [A.RAISE_POT, A.RAISE_POT])
++    obs = g.observation(0)
++    f = compute_features(obs, 0, np.random.default_rng(0))
++    assert f.street == Street.PREFLOP and f.in_position is True
++    assert f.opp_raised_this_street == 1
++    assert f.pot_odds == pytest.approx(12 / (24 + 12))
++    assert f.spr == pytest.approx(62 / 36)               # stack behind after calling / pot after calling
++    # Flop after a called 3-bet: BB acts first, nothing owed, no raises yet.
++    g.apply(A.CHECK_CALL)
++    obs = g.observation(1)
++    f = compute_features(obs, 32, np.random.default_rng(0))
++    assert f.street == Street.FLOP and f.in_position is False
++    assert f.opp_raised_this_street == 0 and f.pot_odds == 0.0
++    assert f.spr == pytest.approx(62 / 36)
++    assert 0.0 <= f.eq <= 1.0 and 0.0 <= f.now <= 1.0
++
++
++def test_features_are_frozen():
++    f = compute_features(_street_observation(Street.FLOP), 16, np.random.default_rng(0))
++    with pytest.raises(dataclasses.FrozenInstanceError):
++        f.eq = 0.0
++
++
++def test_heuristic_is_deterministic_given_rng_and_ignores_opp(obs10k):
++    class Whatever:
++        pass
++
++    sample = obs10k[:500]
++    for opp in (None, Whatever(), object()):
++        acts = []
++        for i, obs in enumerate(sample):
++            rng = np.random.default_rng(i)
++            feats = compute_features(obs, 16, rng)
++            acts.append(heuristic_action(obs, feats, HeuristicParams(), rng, opp))
++        if opp is None:
++            ref = acts
++        assert acts == ref
++
++
++def test_preflop_open_and_fold_behaviour():
++    """Strong hands raise first in, very weak hands fold to a big raise."""
++    strong = _deal("Ah As Kh Kd Qs", "6c 7d 8h 9s Tc", "Jc Jd Td 9d 6d")
++    g = Game(strong, 0)                                   # hero (seat 0) is the button
++    obs = g.observation(0)
++    f = compute_features(obs, 0, np.random.default_rng(0))
++    assert f.pre > 0.6
++    assert heuristic_action(obs, f, HeuristicParams(), np.random.default_rng(0)) in RAISES
++    weak = _deal("6c 6d 6h 6s 7c", "Ah As Kh Kd Qs", "Jc Jd Td 9d 8c")
++    g = _drive(weak, 1, [A.RAISE_POT])                    # villain (button) raises to 6
++    obs = g.observation(0)
++    assert obs.to_call == 4
++    f = compute_features(obs, 0, np.random.default_rng(0))
++    assert f.pre < 0.2
++    assert heuristic_action(obs, f, HeuristicParams(), np.random.default_rng(0)) == A.FOLD
++
++
++def test_range_equity_is_a_monotone_probability():
++    from bot.features import range_equity
++    for street in (1, 2, 3):
++        for t in (0.0, 0.3, 0.55, 0.7, 0.9):
++            vals = [range_equity(street, e, 0, t) for e in np.linspace(0.02, 0.98, 25)]
++            assert all(0.0 < v < 1.0 for v in vals)
++            assert all(b > a for a, b in zip(vals, vals[1:]))       # better hand, more equity
++        for e in (0.3, 0.6, 0.9):
++            vals = [range_equity(street, e, 0, t) for t in np.linspace(0.0, 0.9, 19)]
++            assert all(b <= a + 0.03 for a, b in zip(vals, vals[1:]))   # stronger range, less
++            assert vals[-1] < vals[0] - 0.2
++        assert range_equity(street, 0.6, 0, 0.0) == pytest.approx(0.6, abs=0.03)  # t=0: random
++        assert range_equity(street, 0.8, 1, 0.6) >= range_equity(street, 0.8, 0, 0.6)
++        assert range_equity(street, 0.8, 4, 0.6) <= range_equity(street, 0.8, 0, 0.6)
++
++
++def _river_spots(want, n, seed="riv"):
++    """Up to n engine river spots where the hero (seat 0, BB, out of position) has checked
++    and faces a pot-size bet, filtered by want(features at 256 rollouts)."""
++    out = []
++    for d in range(400):
++        g = _drive(make_deal(seed, d), 1, [A.CHECK_CALL] * 7 + [A.RAISE_POT])
++        obs = g.observation(0)
++        f = compute_features(obs, 256, np.random.default_rng(d))
++        if want(f):
++            out.append((obs, f))
++            if len(out) == n:
++                break
++    return out
++
++
++def test_folds_medium_river_hands_to_a_pot_bet():
++    """Equity 0.55-0.65 vs a random hand wins ~10% against a pot-betting range: fold.
++    (The brief's linear formula, eq - 0.06 > 1/3 + 0.02, would call every one of them.)"""
++    spots = _river_spots(lambda f: 0.55 <= f.eq <= 0.65 and not f.nut & 1, 15)
++    assert len(spots) == 15
++    for obs, f in spots:
++        assert obs.to_call > 0 and f.pot_odds == pytest.approx(1 / 3)
++        assert heuristic_action(obs, f, HeuristicParams(), np.random.default_rng(0)) == A.FOLD
++
++
++def test_calls_or_raises_strong_river_hands_facing_a_pot_bet():
++    spots = _river_spots(lambda f: f.eq >= 0.93, 10)
++    assert len(spots) == 10
++    for obs, f in spots:
++        assert heuristic_action(obs, f, HeuristicParams(), np.random.default_rng(0)) != A.FOLD
+diff --git a/tests/test_heuristic_bot.py b/tests/test_heuristic_bot.py
+new file mode 100644
+index 0000000..5bc4d7e
+--- /dev/null
++++ b/tests/test_heuristic_bot.py
+@@ -0,0 +1,66 @@
++"""The dev-only heuristic evaluation bot (sim/heuristic_bot.py)."""
++
++import functools
++import pickle
++
++import pytest
++
++import sim.heuristic_bot as hb
++from bot.heuristic import HeuristicParams
++from game import AgentConfig, make_deal, Game
++from sim.match import bot_file_factory, play_half, play_match
++from sim.opponents import ZOO
++
++BASELINES = ("random", "calling_station", "always_half", "always_pot")
++
++
++def test_factory_is_picklable_and_carries_params():
++    p = HeuristicParams(bluff_freq=0.0)
++    fac = pickle.loads(pickle.dumps(functools.partial(hb.HeuristicBot, p)))
++    assert fac().params == p
++    assert pickle.loads(pickle.dumps(hb.HeuristicBot)) is hb.HeuristicBot
++    assert hb.HeuristicBot().params == HeuristicParams()
++
++
++def test_plays_a_half_without_errors():
++    h = play_half(functools.partial(hb.HeuristicBot, HeuristicParams()), ZOO["random"],
++                  "hb1", 1, deals=100)
++    assert h.errors_a == 0 and not h.forfeit_a and h.bank_a < 1.0
++
++
++def test_bot_file_interface_plays():
++    h = play_half(bot_file_factory("sim/heuristic_bot.py"), ZOO["calling_station"],
++                  "hb2", 2, deals=60)
++    assert h.errors_a == 0 and not h.forfeit_a
++
++
++def test_time_manager_charged_even_when_a_decision_raises(monkeypatch):
++    bot, memory = hb.HeuristicBot(), {}
++    bot.new_half(AgentConfig(), memory)
++    g = Game(make_deal("tm", 0), 0)
++    obs = g.observation(g.to_act)
++    assert bot.choose_action(obs, memory) in obs.legal_actions
++    tm = memory["tm"]
++    assert tm._t0 is None
++
++    def boom(*a, **k):
++        raise RuntimeError("feature failure")
++
++    monkeypatch.setattr(hb, "compute_features", boom)
++    with pytest.raises(RuntimeError):
++        bot.choose_action(obs, memory)
++    assert tm._t0 is None                     # end() ran in the finally block
++
++
++def test_make_params_overrides():
++    p = hb.make_params({"bluff_freq": 0.0, "value_raise": [0.6, 0.7, 0.8]})
++    assert p.bluff_freq == 0.0 and p.value_raise == (0.6, 0.7, 0.8)
++    assert p.open_min == HeuristicParams().open_min
++
++
++@pytest.mark.slow
++@pytest.mark.parametrize("name", BASELINES)
++def test_beats_each_baseline_over_1000_deals(name):
++    m = play_match(functools.partial(hb.HeuristicBot, HeuristicParams()), ZOO[name], "v1", 1000)
++    assert m.verdict == "A", (name, m.mean_bb, m.ci_low, m.ci_high)
++    assert all(h.errors_a == 0 and h.bank_a < 3.0 for h in m.halves)
+diff --git a/train/fit_range_model.py b/train/fit_range_model.py
+new file mode 100644
+index 0000000..a78fd37
+--- /dev/null
++++ b/train/fit_range_model.py
+@@ -0,0 +1,99 @@
++"""Offline fit of bot.features' range model: python -m train.fit_range_model --spots 100000.
++
++For random spots on each postflop street it records our equity vs random and nut flags,
++the opponent's equity vs random (both 128 rollouts) and who wins at showdown. For each
++threshold t = 0.0, 0.1, ..., 0.9 it fits, on the spots where the opponent's equity is
++>= t, a logistic model (Newton's method, small L2):
++
++    logit P(win) = a + b * logit(eq) + c * [nuts now] + d * [flush possible, not the nuts]
++
++and prints the rows to paste into bot/features.py:_RANGE_COEF (ties count as half a win).
++"""
++
++from __future__ import annotations
++
++import argparse
++import multiprocessing as mp
++import time
++
++import numpy as np
++
++TS = tuple(round(0.1 * k, 1) for k in range(10))
++ITERS = 128
++CHUNK = 2500
++
++
++def _spots(args):
++    seed, idx, n, width = args
++    from bot import equity, fasteval
++    equity.warmup()
++    rng = np.random.default_rng([seed, width, idx])
++    out = np.empty((n, 4))
++    for i in range(n):
++        c = rng.permutation(36)
++        hole, opp, board = c[:5], c[5:10], c[10:15]
++        seen = board[:width]
++        e = equity.equity_vs_random(hole, seen, ITERS, rng)
++        o = equity.equity_vs_random(opp, seen, ITERS, rng)
++        a = fasteval.omaha_batch(hole[None], board[None])[0]
++        b = fasteval.omaha_batch(opp[None], board[None])[0]
++        out[i] = (e, o, 1.0 if a > b else 0.5 if a == b else 0.0, equity.nut_flags(hole, seen))
++    return out
++
++
++def _logit(x):
++    x = np.clip(x, 0.005, 0.995)
++    return np.log(x / (1.0 - x))
++
++
++def fit_logistic(X: np.ndarray, y: np.ndarray, iters: int = 40, lam: float = 1e-2) -> np.ndarray:
++    """Weights minimizing cross-entropy (soft labels allowed) + lam/2 |w|^2."""
++    w = np.zeros(X.shape[1])
++    for _ in range(iters):
++        p = 1.0 / (1.0 + np.exp(-X @ w))
++        g = X.T @ (p - y) + lam * w
++        H = (X * (p * (1.0 - p))[:, None]).T @ X + lam * np.eye(len(w))
++        w -= np.linalg.solve(H, g)
++    return w
++
++
++def fit_street(data: np.ndarray) -> np.ndarray:
++    """(len(TS), 4) rows of (a, b, c, d) for one street's (eq, opp_eq, win, nut) rows."""
++    e, o, w, flags = data.T
++    flags = flags.astype(int)
++    nut = (flags & 1) > 0
++    flush_nonnut = ((flags & 4) > 0) & ~nut
++    X = np.stack([np.ones_like(e), _logit(e), nut, flush_nonnut], axis=1).astype(float)
++    return np.array([fit_logistic(X[o >= t], w[o >= t]) for t in TS])
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--spots", type=int, default=100_000, help="spots per street")
++    ap.add_argument("--workers", type=int, default=4)
++    ap.add_argument("--seed", type=int, default=20261107)
++    ap.add_argument("--out", default="train_data/range_model.npz")
++    a = ap.parse_args()
++    t0 = time.time()
++    jobs = [(a.seed, k, min(CHUNK, a.spots - s), width)
++            for width in (3, 4, 5) for k, s in enumerate(range(0, a.spots, CHUNK))]
++    with mp.get_context("spawn").Pool(a.workers) as pool:
++        parts = pool.map(_spots, jobs, chunksize=1)
++    per = {3: [], 4: [], 5: []}
++    for (_, _, _, width), part in zip(jobs, parts):
++        per[width].append(part)
++    tables = {}
++    for width, name in ((3, "FLOP"), (4, "TURN"), (5, "RIVER")):
++        data = np.concatenate(per[width])
++        tables[name] = fit_street(data)
++        rows = [f"({r[0]:.2f}, {r[1]:.2f}, {r[2]:.2f}, {r[3]:.2f})" for r in tables[name]]
++        lines = [", ".join(rows[k:k + 3]) for k in range(0, len(rows), 3)]
++        print(f"    # {name}\n    (" + ",\n     ".join(lines) + "),")
++    from pathlib import Path
++    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
++    np.savez_compressed(a.out, **tables, ts=np.array(TS), spots=a.spots, seed=a.seed)
++    print(f"wall {time.time() - t0:.0f}s")
++
++
++if __name__ == "__main__":
++    main()

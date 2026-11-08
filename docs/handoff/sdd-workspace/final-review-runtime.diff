@@ -1,0 +1,3173 @@
+# FINAL REVIEW PACKAGE — shipped runtime code, main..c1ded16
+commits: 80
+ .dockerignore      |  11 +
+ agent.py           |  72 ++----
+ bot/__init__.py    |   0
+ bot/abstraction.py | 481 ++++++++++++++++++++++++++++++++++++
+ bot/equity.py      | 166 +++++++++++++
+ bot/exploit.py     | 147 +++++++++++
+ bot/fasteval.py    | 127 ++++++++++
+ bot/features.py    | 157 ++++++++++++
+ bot/heuristic.py   | 188 ++++++++++++++
+ bot/opponent.py    | 393 +++++++++++++++++++++++++++++
+ bot/policy.py      | 714 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ bot/preflop.py     |  51 ++++
+ bot/strategy.py    | 179 ++++++++++++++
+ bot/timing.py      | 129 ++++++++++
+ bot/tree.py        | 214 ++++++++++++++++
+ data/blueprint.npz | Bin 0 -> 51052391 bytes
+ data/buckets.npz   | Bin 0 -> 459278 bytes
+ data/preflop.npz   | Bin 0 -> 1088475 bytes
+ requirements.txt   |   1 +
+ 19 files changed, 2976 insertions(+), 54 deletions(-)
+
+51052391 data/blueprint.npz
+459278 data/buckets.npz
+1088475 data/preflop.npz
+
+diff --git a/.dockerignore b/.dockerignore
+new file mode 100644
+index 0000000..b69b167
+--- /dev/null
++++ b/.dockerignore
+@@ -0,0 +1,11 @@
++.git
++.venv
++__pycache__
++.pytest_cache
++.superpowers
++context
++train_data
++sim
++tests
++train
++docs
+diff --git a/agent.py b/agent.py
+index 3528dfb..403e7e1 100644
+--- a/agent.py
++++ b/agent.py
+@@ -36,77 +36,41 @@ from game import Action, AgentConfig, HandResult, Observation, Street
+ # during your first decision (where it would eat into your time bank).
+ # Do any other slow setup (loading a model, ...) here too: the server must
+ # answer within 15 seconds of starting.
+ warmup()
+ 
++# Our tables, one dummy decision per street and the CPU-speed measurement (bot/policy.py).
++from bot import policy  # noqa: E402
++
++policy.warmup()
++
+ # rename as your team/bot's name
+-PARTICIPANT = "TotallyAwesomeDatathonParticipant"
+-AGENT_NAME = "JustAsAwesomeAgent"
++PARTICIPANT = "3XKO"
++AGENT_NAME = "ShortDeckHybrid"
+ 
+ 
+ # ===== YOUR CODE HERE =====
+ 
+-def new_half(config: AgentConfig, memory: dict) -> None:
+-    """Called at the start of each half-match (1000 hands).
++# The layered policy: base = blueprint else heuristic; exploits then modify the base;
++# a guaranteed-legal default backs every layer.
++# BOT holds settings only; all per-half state lives in `memory` (see bot/policy.py).
++BOT = policy.PolicyBot()
+ 
+-    `memory` is a fresh, empty dict every half. Store anything you want to
+-    remember between hands in it, e.g. memory["opp_raises"] = 0.
+-    `config` holds the match settings (starting_stack, big_blind, ...).
+ 
+-    In the tournament, each half runs in a brand-new copy of your server,
+-    so nothing you learn in one half carries over to the other half.
+-    """
+-    memory["hands_played"] = 0
++def new_half(config: AgentConfig, memory: dict) -> None:
++    """Start of a half: fresh time manager, rng and layer state in memory. Never raises."""
++    BOT.new_half(config, memory)
+ 
+ 
+ def choose_action(obs: Observation, memory: dict) -> Action:
+-    """Called every time it is your turn. Return one of obs.legal_actions.
+-
+-    What you can see in obs:
+-        hand_index          which hand of the half this is (0, 1, 2, ...)
+-        street              Street.PREFLOP, Street.FLOP, Street.TURN or Street.RIVER
+-        hole_cards          your 5 cards as ints, sorted ascending (0-35)
+-        board               board (community) cards seen so far (0, 3, 4 or 5 ints)
+-        pot                 total chips both players put in this hand
+-        to_call             chips you must add to match the opponent
+-        my_bet, opp_bet     chips you,opponent put in on THIS street
+-        my_stack, opp_stack chips each player still has behind
+-        is_button           True if you are the button (small blind)
+-        legal_actions       the Actions you may return right now
+-        raise_to            {RAISE_HALF: total, RAISE_POT: total} for legal raises
+-        min_raise_to        smallest normal raise total (all-ins may be lower)
+-        raises_this_street  raises so far this street (max 4)
+-        action_history      this hand's actions so far; each has
+-                            street, is_me, action, amount, street_total
+-        big_blind           size of the big blind in chips
+-
+-    Actions: Action.FOLD, Action.CHECK_CALL, Action.RAISE_HALF, Action.RAISE_POT
+-    Cards are ints: card_rank(c) is 0 (six) .. 8 (ace), card_suit(c) is 0..3,
+-    and cards_to_str(obs.hole_cards) prints them like "6h 7c 9s Kd Ah".
+-    Once all 5 board cards are out, omaha_score(obs.hole_cards, obs.board)
+-    scores your hand (higher is better).
+-    """
+-
+-    # Simple example of a heuristic bot, which just checks when it is of no cost, otherwise folds
+-    # Replace this with your strategy!
+-    if obs.to_call == 0:
+-        return Action.CHECK_CALL
+-    return Action.FOLD
++    """Every layer has its own try/except; the answer is always in obs.legal_actions."""
++    return BOT.choose_action(obs, memory)
+ 
+ 
+ def on_hand_end(result: HandResult, memory: dict) -> None:
+-    """Called once for every finished hand. Optional: learn from what happened.
+-
+-    To save time, the judge sends finished hands along with your next
+-    decision request, so this always runs BEFORE choose_action() sees the
+-    next hand. (The last hands of a half arrive at the end of the half.)
+-
+-    result has: hand_index, my_net (chips won or lost), pot,
+-    went_to_showdown, board (cards revealed), opp_hole (opponent's cards,
+-    only after a showdown, else None), winner ('me', 'opp' or 'split').
+-    """
+-    memory["hands_played"] += 1
++    """Charges its time to the time manager. Never raises."""
++    BOT.on_hand_end(result, memory)
+ 
+ # ===== END OF YOUR CODE =====
+ 
+ 
+ # ===== SERVER PLUMBING (you normally don't need to edit below) =====
+diff --git a/bot/__init__.py b/bot/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/bot/abstraction.py b/bot/abstraction.py
+new file mode 100644
+index 0000000..48d4c44
+--- /dev/null
++++ b/bot/abstraction.py
+@@ -0,0 +1,481 @@
++"""Card abstraction: (street, hole, board) -> a small bucket id for the CFR blueprint.
++
++The blueprint keeps one strategy per (betting node, bucket) pair (nodes: bot/tree.py),
++so the bucket is all it knows about the cards. Two rules shape this module: the bucket
++must be cheap at the table, and it must be the very bucket the trainer saw for the same
++cards. Both hold by construction. Every feature below is a deterministic function of
++the cards (no rollouts, no rng), computed by this code offline (train/fit_buckets.py,
++the Task 17 deal dataset) and at runtime. So the runtime bucket equals the offline
++bucket exactly, whatever rollout budget the time manager allows, iters=0 included.
++
++Buckets (defaults: preflop 200, flop 100, turn 100, river 100 = DEFAULT_NUM_BUCKETS)
++- preflop: quantile bucket of preflop_strength(hole) (bot/preflop.py: equity vs a
++  random hand), edges fitted on all 376,992 holes.
++- flop, turn: a rows x cols grid (10 x 10), bucket = row * cols + col.
++  - row: quantile bucket of strength, our made hand now vs a random hand (ties half),
++    the quantity bot.equity.strength_now estimates.
++  - col: quantile bucket of equity, P(win) + P(tie)/2 vs a random hand with the board
++    run out (bot.equity.equity_vs_random), among the hands of that row only: every row
++    has its own equity edges, so each cell holds about 1% of hands, and a big draw (low
++    row, high column) never shares a bucket with a made hand of the same equity.
++- river: hands that are not the nuts get quantile buckets 0 .. B-6 of equity (equal to
++  strength on the river). The nuts (nut_flags bit 0, ties count) take the top 5, by the
++  category of our hand: B-5 trips, B-4 full house, B-3 flush, B-2 four of a kind, B-1
++  straight flush. Trips beat a straight in this game and the opponent can always make
++  some set, so the river nuts are never below trips (lower categories would map to B-5).
++- Edges: a value equal to an edge goes to the upper bucket (searchsorted side "right"),
++  and the result always lies in range(NUM_BUCKETS[street]).
++
++Features (exact up to fixed designs; rms errors measured on 100 random spots per street)
++- Pair values: every unseen pair's best 2+3 hand with the board is scored once. An
++  opponent hole's made hand is then the max over its 10 pairs: 10 gathers, no scoring.
++  Scores come from a 0.7 MB pair-class x triple-class table built from bot.fasteval.
++- Opponent holes come from fixed designs over positions 0..n-1, mapped to this spot's n
++  unseen cards in ascending order. Rows are blocks cut from shuffles, so each position is
++  used about equally often.
++- strength (flop, turn, river): our made hand vs 4,096 design holes (16,384 on the
++  river): 0.004-0.005 vs exact enumeration of every opponent hole (0.003 river).
++- equity, turn: exact over the river card, 304 design holes for each of the 27 river
++  cards: 0.004 vs 40k-rollout Monte Carlo (whose own sd is 0.0025).
++- equity, flop: exact over all 378 (turn, river) runouts, 8 design holes each. A pair's
++  full-board hand is max(pair + flop, pair + one runout card + two flop cards, pair +
++  both runout cards + one flop card); the first two are shared by many cells, so a cell
++  costs 3 lookups: 0.007 vs 40k-rollout Monte Carlo.
++- nut flag (exact): our hand >= every unseen pair's best hand, as nut_flags bit 0.
++
++Cost and the rollout budget
++- One call costs about 3 us preflop, 0.25 ms flop, 0.15 ms turn, 0.09 ms river on the
++  dev laptop (p99 0.3 ms). That fits in the judge's free 1 ms per request. A policy that
++  acts several times on one street can cache the bucket per (street, hole, board).
++- bucket() keeps the plan's `iters` and `rng` arguments but ignores them: there is no
++  minimum budget, and the bucket at iters=0 is the offline bucket.
++- Monte Carlo features (the plan's design) would disagree with the offline bucket at the
++  table. On this 10 x 10 grid, runtime at 128 rollouts vs offline at 2,000 lands in the
++  same or an adjacent cell only 71% of the time on the flop and 64% on the turn; at 0
++  rollouts, 15% and 19% (Task 16 report).
++
++Data file (data/buckets.npz from train/fit_buckets.py; arrays)
++- format: 1. num_buckets: int[4] (preflop, flop, turn, river). flop_grid, turn_grid: int[2].
++- preflop_edges [B0-1]; flop/turn_strength_edges [rows-1]; flop/turn_equity_edges
++  [rows, cols-1]; river_edges [B3-6]. All non-decreasing floats.
++- design_strength_28, design_strength_27, design_strength_26: int16 [R, 10] indices into
++  combinations(range(n), 2), the 10 pairs of one design hole (flop, turn, river).
++- design_turn_pairs int16 [Rt, 10] (pairs of range(27)), design_turn_river int16 [Rt]
++  (the river position, never in the hole).
++- design_flop_pairs int16 [Rf, 10] (pairs of range(28)), design_flop_runout int16 [Rf]
++  (an index into combinations(range(28), 2): the runout's two positions, never in the hole).
++- Other arrays are metadata from the fit (seed, sample sizes, validation errors).
++
++Module state is read-only (R22).
++- NUM_BUCKETS is a read-only mapping, set at import from the file's num_buckets, or
++  DEFAULT_NUM_BUCKETS if there is no readable file.
++- Tables load lazily on first use (bucket / load_buckets / warmup) into one cached
++  BucketTables with non-writeable arrays.
++- A missing file raises FileNotFoundError at call time, never at import.
++"""
++
++from __future__ import annotations
++
++import bisect
++from collections import Counter
++from collections.abc import Mapping, Sequence
++from itertools import combinations, combinations_with_replacement, permutations
++from pathlib import Path
++from types import MappingProxyType
++from typing import NamedTuple
++
++import numpy as np
++
++from bot import fasteval, preflop
++from game import BOARD_CARDS_VISIBLE, Street
++
++DEFAULT_PATH = Path(__file__).resolve().parent.parent / "data" / "buckets.npz"
++DEFAULT_NUM_BUCKETS: Mapping[Street, int] = MappingProxyType(
++    {Street.PREFLOP: 200, Street.FLOP: 100, Street.TURN: 100, Street.RIVER: 100})
++NUT_BUCKETS = 5            # river: trips, full house, flush, four of a kind, straight flush
++FORMAT = 1
++_LOWEST_NUT_CATEGORY = 4   # three of a kind (evaluator category numbers)
++
++
++class Features(NamedTuple):
++    """What a bucket is cut from. Preflop: strength == equity == the preflop table."""
++
++    strength: float        # made hand now vs a random hand, ties half
++    equity: float          # showdown equity vs a random hand, board run out
++    nut: bool              # we hold the nuts now (ties count); False preflop
++    category: int          # evaluator category of our made hand; 0 preflop
++
++
++# ---- pair-class x triple-class score table (built once, read-only)
++
++_RANK_PAIRS = tuple(combinations_with_replacement(range(9), 2))      # 45 rank classes
++_RANK_TRIPLES = tuple(combinations_with_replacement(range(9), 3))    # 165 rank classes
++_NTC = len(_RANK_TRIPLES) * 5     # triple codes: rank class + 165 * suit code (4 = mixed)
++_SCORE: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None     # pair codes, triple codes, table
++
++
++def _build_score_table() -> np.ndarray:
++    """int32 [45 * 5 * 165 * 5]: score of (pair class, pair suit code, triple class,
++    triple suit code). Suit code s < 4: every card of suit s; 4: mixed suits. A flush is
++    a suited pair and a monotone triple of the same suit; any other code pair scores the
++    ranks without a flush."""
++    rows, where = [], []
++    for i, pair in enumerate(_RANK_PAIRS):
++        for j, triple in enumerate(_RANK_TRIPLES):
++            ranks = pair + triple
++            counts = Counter(ranks)
++            if max(counts.values()) > 4:
++                continue                       # five of a kind: no such hand
++            seen: Counter = Counter()
++            cards = []
++            for r in ranks:                    # copies of a rank get suits 0, 1, ...
++                cards.append(4 * r + seen[r])
++                seen[r] += 1
++            if len(counts) == 5:
++                cards[0] += 1                  # five distinct ranks: break the flush
++                rows.append([4 * r for r in ranks])
++                where.append((1, i, j))
++            rows.append(cards)
++            where.append((0, i, j))
++    scores = fasteval.score5_batch(np.array(rows, dtype=np.intp))
++    plain = np.zeros((len(_RANK_PAIRS), len(_RANK_TRIPLES)), dtype=np.int32)
++    flush = np.zeros_like(plain)
++    for (f, i, j), v in zip(where, scores):
++        (flush if f else plain)[i, j] = v
++    table = np.empty((5, len(_RANK_PAIRS), 5, len(_RANK_TRIPLES)), dtype=np.int32)
++    for ps in range(5):
++        for ts in range(5):
++            table[ps, :, ts, :] = flush if ps == ts < 4 else plain
++    return table.reshape(-1)
++
++
++def _score_tables() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
++    """(pair_code [36, 36], triple_code [36, 36, 36], table): a 5-card hand made of
++    cards (a, b) and (x, y, z) scores table[pair_code[a, b] + triple_code[x, y, z]],
++    equal to fasteval.score5_batch. Entries for repeated cards are meaningless."""
++    global _SCORE
++    if _SCORE is None:
++        rank, suit = np.arange(36) >> 2, np.arange(36) & 3
++        pair_class = np.zeros((9, 9), dtype=np.intp)
++        for i, (a, b) in enumerate(_RANK_PAIRS):
++            pair_class[a, b] = pair_class[b, a] = i
++        triple_class = np.zeros((9, 9, 9), dtype=np.intp)
++        for j, t in enumerate(_RANK_TRIPLES):
++            for p in set(permutations(t)):
++                triple_class[p] = j
++        ps = np.where(suit[:, None] == suit[None, :], suit[:, None], 4)
++        pair_code = (ps * len(_RANK_PAIRS) + pair_class[rank[:, None], rank[None, :]]) * _NTC
++        s0, s1, s2 = suit[:, None, None], suit[None, :, None], suit[None, None, :]
++        ts = np.where((s0 == s1) & (s1 == s2), s0, 4)
++        triple_code = ts * len(_RANK_TRIPLES) + triple_class[rank[:, None, None], rank[None, :, None],
++                                                             rank[None, None, :]]
++        arrays = (pair_code.astype(np.intp), triple_code.astype(np.intp), _build_score_table())
++        for a in arrays:
++            a.flags.writeable = False
++        _SCORE = arrays
++    return _SCORE
++
++
++# ---- position tables shared by every spot
++
++def _combos(n: int, k: int) -> np.ndarray:
++    a = np.array(list(combinations(range(n), k)), dtype=np.intp)
++    a.flags.writeable = False
++    return a
++
++
++_ALL = np.arange(36, dtype=np.intp)
++_ALL.flags.writeable = False
++_PAIRS = MappingProxyType({n: _combos(n, 2) for n in (26, 27, 28)})        # unseen-card pairs
++_TRIPLES = MappingProxyType({w: _combos(w, 3) for w in (3, 4, 5)})         # board triples
++_BOARD_PAIRS = MappingProxyType({w: _combos(w, 2) for w in (3, 4)})        # join a new card
++_HOLE_A, _HOLE_B = fasteval.PAIR_IDX[:, 0], fasteval.PAIR_IDX[:, 1]       # the 10 pairs of a hole
++
++
++def _rate(code: np.ndarray) -> float:
++    """code [10, R] int8 per (pair, design hole): 0 we beat that pair, 1 tie, 2 it beats
++    us. A hole's result is its worst pair; returns P(win) + P(tie) / 2 over the R holes."""
++    worst = code.max(axis=0)
++    return (np.count_nonzero(worst == 0) + 0.5 * np.count_nonzero(worst == 1)) / worst.size
++
++
++def _versus(theirs: np.ndarray, ours) -> np.ndarray:
++    """int8 code: 0 where theirs < ours, 1 where equal, 2 where theirs > ours."""
++    code = (theirs >= ours).astype(np.int8)
++    code += theirs > ours
++    return code
++
++
++def _read_only(a: np.ndarray, dtype=None) -> np.ndarray:
++    out = np.array(a, dtype=dtype)       # a private copy
++    out.flags.writeable = False
++    return out
++
++
++def _check(street, hole, board) -> tuple[Street, np.ndarray, np.ndarray]:
++    """Validated (street, hole, board) as Street and intp arrays; ValueError otherwise."""
++    try:
++        st = Street(int(street))
++        h = [int(c) for c in hole]
++        b = [int(c) for c in board]
++    except (TypeError, ValueError) as e:
++        raise ValueError(f"bad street or cards: {street!r}, {hole!r}, {board!r}") from e
++    if len(h) != 5:
++        raise ValueError(f"a hole has 5 cards, got {h}")
++    if len(b) != BOARD_CARDS_VISIBLE[st]:
++        raise ValueError(f"{st.name} has {BOARD_CARDS_VISIBLE[st]} board cards, got {b}")
++    cards = h + b
++    if min(cards) < 0 or max(cards) > 35 or len(set(cards)) != len(cards):
++        raise ValueError(f"cards must be distinct ints 0..35, got hole {h} board {b}")
++    return st, np.array(h, dtype=np.intp), np.array(b, dtype=np.intp)
++
++
++class Featurizer:
++    """Deterministic features from the fixed designs (module docstring)."""
++
++    def __init__(self, designs: Mapping[str, np.ndarray]) -> None:
++        self._pair_code, self._triple_code, self._table = _score_tables()
++        strength_rows = {}
++        for n in (28, 27, 26):
++            rows, _ = self._holes_of(designs, f"design_strength_{n}", n)
++            strength_rows[n] = _read_only(rows.T, np.intp)                     # [10, R]
++        self._strength_rows = MappingProxyType(strength_rows)
++        tp, holes = self._holes_of(designs, "design_turn_pairs", 27)
++        river = self._positions(designs, "design_turn_river", len(tp), 27)
++        if (holes == river[:, None]).any():
++            raise ValueError("design_turn_river: a river card is also in its hole")
++        self._turn_cells = _read_only((tp * 27 + river[:, None]).T, np.intp)   # into [P, 27]
++        fp, holes = self._holes_of(designs, "design_flop_pairs", 28)
++        runout = self._positions(designs, "design_flop_runout", len(fp), len(_PAIRS[28]))
++        turn_pos, river_pos = _PAIRS[28][runout, 0], _PAIRS[28][runout, 1]
++        if (holes == turn_pos[:, None]).any() or (holes == river_pos[:, None]).any():
++            raise ValueError("design_flop_runout: a runout card is also in its hole")
++        self._flop_pairs = _read_only(fp.T, np.intp)                              # [10, Rf]
++        self._flop_runout = _read_only(runout, np.intp)                           # [Rf]
++        self._flop_turn_cell = _read_only((fp * 28 + turn_pos[:, None]).T, np.intp)
++        self._flop_river_cell = _read_only((fp * 28 + river_pos[:, None]).T, np.intp)
++
++    @staticmethod
++    def _holes_of(designs, key: str, n: int) -> tuple[np.ndarray, np.ndarray]:
++        """([R, 10] pair indices of range(n), [R, 5] the positions of each hole). Every row
++        must be the 10 pairs of 5 distinct positions; anything else raises ValueError."""
++        a = np.asarray(designs[key]).astype(np.intp)
++        if a.ndim != 2 or a.shape[1] != 10 or len(a) == 0 or a.min() < 0 or a.max() >= len(_PAIRS[n]):
++            raise ValueError(f"{key}: need [R, 10] pair indices of range({n}), got {a.shape}")
++        ends = np.sort(_PAIRS[n][a].reshape(len(a), 20), axis=1)
++        holes = ends[:, ::4]                     # a hole's 10 pairs name each position 4 times
++        pair_id = np.zeros((n, n), dtype=np.intp)
++        pair_id[_PAIRS[n][:, 0], _PAIRS[n][:, 1]] = np.arange(len(_PAIRS[n]))
++        want = pair_id[holes[:, _HOLE_A], holes[:, _HOLE_B]]
++        if (np.diff(holes, axis=1) <= 0).any() or (np.sort(want, axis=1) != np.sort(a, axis=1)).any():
++            raise ValueError(f"{key}: a row is not the 10 pairs of one 5-card hole")
++        return a, holes
++
++    @staticmethod
++    def _positions(designs, key: str, rows: int, limit: int) -> np.ndarray:
++        a = np.asarray(designs[key]).astype(np.intp)
++        if a.shape != (rows,) or a.min() < 0 or a.max() >= limit:
++            raise ValueError(f"{key}: need [{rows}] indices below {limit}, got {a.shape}")
++        return a
++
++    def features(self, street, hole, board) -> Features:
++        st, h, b = _check(street, hole, board)
++        if st == Street.PREFLOP:
++            s = preflop.preflop_strength([int(c) for c in h])
++            return Features(s, s, False, 0)
++        pc_of, tc_of, table = self._pair_code, self._triple_code, self._table
++        mask = np.ones(36, dtype=bool)
++        mask[h] = False
++        mask[b] = False
++        unseen = _ALL[mask]                                   # ascending: design positions
++        n = len(unseen)
++        pairs = _PAIRS[n]
++        pc = pc_of[unseen[pairs[:, 0]], unseen[pairs[:, 1]]]  # [P] every opponent pair
++        hc = pc_of[h[_HOLE_A], h[_HOLE_B]]                    # [10] our pairs
++        tri = b[_TRIPLES[len(b)]]
++        tc = tc_of[tri[:, 0], tri[:, 1], tri[:, 2]]           # [T] board triples
++        pv = table[tc[:, None] + pc[None, :]].max(axis=0)     # [P] each pair's hand now
++        ours = int(table[tc[:, None] + hc[None, :]].max())
++        strength = _rate(_versus(pv, ours)[self._strength_rows[n]])
++        nut = ours >= int(pv.max())
++        category = ours >> 20
++        if st == Street.RIVER:
++            return Features(strength, strength, nut, category)
++        if st == Street.TURN:
++            equity = self._turn_equity(unseen, b, pc, hc, pv, ours)
++        else:
++            equity = self._flop_equity(unseen, b, pc, hc, pv, ours)
++        return Features(strength, equity, nut, category)
++
++    def _turn_equity(self, unseen, b, pc, hc, pv, ours) -> float:
++        """Exact over the 27 river cards; design holes for the opponent."""
++        table, tc_of = self._table, self._triple_code
++        bp = b[_BOARD_PAIRS[4]]                                           # [6, 2]
++        new = tc_of[unseen[None, :], bp[:, :1], bp[:, 1:]]                # [6, 27]: river + 2 board
++        v = table[new[:, None, :] + pc[None, :, None]].max(axis=0)        # [P, 27]
++        np.maximum(v, pv[:, None], out=v)
++        o = table[new[:, None, :] + hc[None, :, None]].max(axis=(0, 1))   # [27]
++        np.maximum(o, ours, out=o)
++        return _rate(_versus(v, o[None, :]).ravel()[self._turn_cells])
++
++    def _flop_equity(self, unseen, b, pc, hc, pv, ours) -> float:
++        """Exact over the 378 runouts; design holes for the opponent, evaluated per cell."""
++        table, tc_of = self._table, self._triple_code
++        bp = b[_BOARD_PAIRS[3]]                                           # [3, 2]
++        one = tc_of[unseen[None, :], bp[:, :1], bp[:, 1:]]                # [3, 28]: card + 2 flop
++        run = _PAIRS[28]
++        two = tc_of[unseen[run[:, 0]][None, :], unseen[run[:, 1]][None, :], b[:, None]]  # [3, 378]
++        one_card = table[one[:, None, :] + pc[None, :, None]].max(axis=0).ravel()        # [P * 28]
++        cells, k = self._flop_pairs, self._flop_runout
++        v = pv[cells]                                                     # [10, Rf]
++        np.maximum(v, one_card[self._flop_turn_cell], out=v)
++        np.maximum(v, one_card[self._flop_river_cell], out=v)
++        pcc = pc[cells]
++        for i in range(3):
++            np.maximum(v, table[pcc + two[i][k]], out=v)
++        o1 = table[one[:, None, :] + hc[None, :, None]].max(axis=(0, 1))  # [28]
++        o2 = table[two[:, None, :] + hc[None, :, None]].max(axis=(0, 1))  # [378]
++        o = np.maximum(np.maximum(o1[run[:, 0]], o1[run[:, 1]]), o2)
++        np.maximum(o, ours, out=o)
++        return _rate(_versus(v, o[k][None, :]))
++
++
++class BucketTables:
++    """A loaded abstraction: bucket counts, edges and the feature designs (read-only)."""
++
++    def __init__(self, arrays: Mapping[str, np.ndarray], path: Path | None = None) -> None:
++        self.path = path
++        try:
++            fmt = int(np.asarray(arrays["format"]))
++            nb = [int(x) for x in np.asarray(arrays["num_buckets"]).reshape(-1)]
++            grids = {s: tuple(int(x) for x in np.asarray(arrays[f"{s.name.lower()}_grid"]).reshape(-1))
++                     for s in (Street.FLOP, Street.TURN)}
++        except KeyError as e:
++            raise ValueError(f"{path}: not a bucket table, missing {e}") from None
++        if fmt != FORMAT:
++            raise ValueError(f"{path}: bucket table format {fmt}, this code reads {FORMAT}")
++        if len(nb) != 4 or min(nb) < 1 or nb[Street.RIVER] <= NUT_BUCKETS:
++            raise ValueError(f"{path}: bad num_buckets {nb}")
++        for s, g in grids.items():
++            if len(g) != 2 or min(g) < 1 or g[0] * g[1] != nb[s]:
++                raise ValueError(f"{path}: {s.name} grid {g} does not make {nb[s]} buckets")
++        self.num_buckets: Mapping[Street, int] = MappingProxyType(dict(zip(Street, nb)))
++        self.grid: Mapping[Street, tuple[int, int]] = MappingProxyType(grids)
++        self.preflop_edges = self._edges(arrays, "preflop_edges", (nb[Street.PREFLOP] - 1,))
++        self.river_edges = self._edges(arrays, "river_edges", (nb[Street.RIVER] - NUT_BUCKETS - 1,))
++        strength, equity = {}, {}
++        for s, (rows, cols) in grids.items():
++            name = s.name.lower()
++            strength[s] = self._edges(arrays, f"{name}_strength_edges", (rows - 1,))
++            equity[s] = self._edges(arrays, f"{name}_equity_edges", (rows, cols - 1))
++        self.strength_edges: Mapping[Street, np.ndarray] = MappingProxyType(strength)
++        self.equity_edges: Mapping[Street, np.ndarray] = MappingProxyType(equity)
++        # bisect on tuples: the same cut as searchsorted(side="right"), faster for one value
++        self._cuts = MappingProxyType({
++            Street.PREFLOP: tuple(self.preflop_edges.tolist()),
++            Street.RIVER: tuple(self.river_edges.tolist()),
++            **{s: (tuple(strength[s].tolist()), tuple(tuple(r) for r in equity[s].tolist()))
++               for s in grids},
++        })
++        self.featurizer = Featurizer(arrays)
++
++    def _edges(self, arrays, key: str, shape: tuple[int, ...]) -> np.ndarray:
++        if key not in arrays:
++            raise ValueError(f"{self.path}: missing {key}")
++        a = _read_only(arrays[key], np.float64)
++        if a.shape != shape:
++            raise ValueError(f"{self.path}: {key} has shape {a.shape}, expected {shape}")
++        if not np.isfinite(a).all() or (a.size and (np.diff(a, axis=-1) < 0).any()):
++            raise ValueError(f"{self.path}: {key} must be finite and non-decreasing")
++        return a
++
++    def features(self, street, hole, board) -> Features:
++        return self.featurizer.features(street, hole, board)
++
++    def bucket_from_features(self, street, f: Features) -> int:
++        """The bucket of features f on this street (the cut rules in the module docstring)."""
++        st = Street(int(street))
++        cut = self._cuts[st]
++        if st == Street.PREFLOP:
++            return bisect.bisect_right(cut, f.strength)
++        if st == Street.RIVER:
++            if f.nut:
++                top = self.num_buckets[st] - NUT_BUCKETS
++                return top + min(max(int(f.category) - _LOWEST_NUT_CATEGORY, 0), NUT_BUCKETS - 1)
++            return bisect.bisect_right(cut, f.equity)
++        row = bisect.bisect_right(cut[0], f.strength)
++        return row * self.grid[st][1] + bisect.bisect_right(cut[1][row], f.equity)
++
++    def bucket(self, street, hole, board) -> int:
++        return self.bucket_from_features(street, self.featurizer.features(street, hole, board))
++
++
++def _num_buckets_in(path: Path) -> Mapping[Street, int]:
++    """The file's bucket counts, or DEFAULT_NUM_BUCKETS if it can't be read. Never raises."""
++    try:
++        with np.load(path) as z:
++            nb = [int(x) for x in z["num_buckets"].reshape(-1)]
++        if len(nb) == 4 and min(nb) > 0:
++            return MappingProxyType(dict(zip(Street, nb)))
++    except Exception:          # missing or unreadable: bucket() reports it at call time
++        pass
++    return DEFAULT_NUM_BUCKETS
++
++
++NUM_BUCKETS: Mapping[Street, int] = _num_buckets_in(DEFAULT_PATH)
++_TABLES: BucketTables | None = None
++
++
++def _load(path: Path) -> BucketTables:
++    if not path.is_file():
++        raise FileNotFoundError(f"card abstraction table not found: {path} "
++                                "(build it with: python -m train.fit_buckets)")
++    with np.load(path) as z:
++        arrays = {k: z[k] for k in z.files}
++    return BucketTables(arrays, path)
++
++
++def load_buckets(path: str | Path | None = None) -> BucketTables:
++    """The tables at `path`; with no path, the default file, loaded once and cached.
++
++    Raises FileNotFoundError if the file is missing and ValueError if it is malformed.
++    Raises RuntimeError if the default file's counts differ from NUM_BUCKETS (it was
++    replaced after import), because ids would then fall outside NUM_BUCKETS.
++    """
++    global _TABLES
++    if path is not None:
++        return _load(Path(path))
++    if _TABLES is None:
++        tables = _load(DEFAULT_PATH)
++        if dict(tables.num_buckets) != dict(NUM_BUCKETS):
++            raise RuntimeError(f"{DEFAULT_PATH} changed after import: it has "
++                               f"{dict(tables.num_buckets)} buckets, NUM_BUCKETS says {dict(NUM_BUCKETS)}")
++        _TABLES = tables
++    return _TABLES
++
++
++def features(street, hole: Sequence[int], board: Sequence[int]) -> Features:
++    """Features of the default tables (load_buckets())."""
++    return load_buckets().features(street, hole, board)
++
++
++def bucket(street, hole: Sequence[int], board: Sequence[int], iters: int = 0, rng=None) -> int:
++    """Bucket id in range(NUM_BUCKETS[street]) for our hole on this board.
++
++    Deterministic: `iters` and `rng` are accepted for the plan's interface and ignored
++    (no rollouts, rng untouched), so any budget, iters <= 0 included, gives the bucket
++    the trainer used. There is no minimum iters to recommend; the cost is fixed (module
++    docstring). Raises ValueError for a bad street or bad cards, FileNotFoundError if
++    data/buckets.npz is missing.
++    """
++    return load_buckets().bucket(street, hole, board)
++
++
++def warmup() -> None:
++    """Build the evaluator and score tables and load every table (about 50 ms).
++
++    Raises FileNotFoundError if data/buckets.npz or data/preflop.npz is missing.
++    """
++    fasteval.warmup()
++    preflop.load_preflop()
++    load_buckets()
+diff --git a/bot/equity.py b/bot/equity.py
+new file mode 100644
+index 0000000..e3f2857
+--- /dev/null
++++ b/bot/equity.py
+@@ -0,0 +1,166 @@
++"""Vectorized Monte Carlo equity, current-board strength, and exact nut flags.
++
++Zero budget: bot.timing.TimeManager.iters() returns 0 when time is short, and callers
++pass that straight in. equity_vs_random and strength_now treat any iters <= 0 as "no
++rollouts": they sample nothing, leave rng untouched and return a cheap deterministic
++estimate in [0, 1] (about a quarter of the cost of 16 rollouts), never NaN and never an
++exception:
++- equity_vs_random preflop: the offline preflop table (bot.preflop), the same
++  quantity from 3,000 rollouts per hand class; 0.5 if the table cannot be loaded.
++- otherwise (both functions): where our current made hand ranks among the made hands
++  of random holes on random boards of the same size (ties count half). It ignores this
++  board's texture, so it is rough (mean error about 0.1 against the exact strength),
++  and equity gets no credit for draws.
++"""
++
++from __future__ import annotations
++
++from itertools import combinations
++from typing import Sequence
++
++import numpy as np
++
++from bot import fasteval, preflop
++
++_ALL = np.arange(36, dtype=np.intp)
++_ACE = 8
++
++_REF_ROWS = 2048           # random (hole, board) spots per board width in the reference
++_REF_SEED = 20261107
++_REF: dict[int, np.ndarray] | None = None   # board width -> sorted made-hand scores
++
++
++def warmup() -> None:
++    """Build fasteval's table and the zero-budget reference (idempotent, about 10 ms)."""
++    global _REF
++    fasteval.warmup()
++    if _REF is None:
++        rng = np.random.default_rng(_REF_SEED)
++        ref = {}
++        for w in (3, 4, 5):
++            cards = rng.random((_REF_ROWS, 36)).argsort(axis=1)[:, :5 + w]
++            ref[w] = np.sort(fasteval.made_now_batch(cards[:, :5], cards[:, 5:]))
++        _REF = ref
++
++
++def _made_hand_estimate(hole: Sequence[int], board: Sequence[int]) -> float:
++    """Zero-budget strength: our made hand's rank among the reference made hands."""
++    if _REF is None:
++        warmup()
++    ours = fasteval.made_now_batch(np.asarray(hole, dtype=np.intp)[None, :],
++                                   np.asarray(board, dtype=np.intp)[None, :])[0]
++    ref = _REF[len(board)]
++    return float(ref.searchsorted(ours, "left") + ref.searchsorted(ours, "right")) / (2 * len(ref))
++
++
++def _zero_budget_equity(hole: Sequence[int], board: Sequence[int]) -> float:
++    if len(board) == 0:
++        try:
++            return preflop.preflop_strength(hole)
++        except (OSError, KeyError, ValueError):     # missing or unreadable table, bad hole
++            return 0.5
++    if len(board) not in (3, 4, 5):
++        raise ValueError("equity_vs_random with iters <= 0 needs a board of 0, 3, 4 or 5 cards")
++    return _made_hand_estimate(hole, board)
++
++
++def _unseen(hole: Sequence[int], board: Sequence[int]) -> np.ndarray:
++    mask = np.ones(36, dtype=bool)
++    mask[list(hole)] = False
++    mask[list(board)] = False
++    return _ALL[mask]
++
++
++def _sample(unseen: np.ndarray, k: int, iters: int, rng: np.random.Generator) -> np.ndarray:
++    """(iters, k) cards drawn without replacement from unseen."""
++    order = rng.random((iters, len(unseen))).argsort(axis=1)[:, :k]
++    return unseen[order]
++
++
++def _score(ours: np.ndarray, theirs: np.ndarray) -> float:
++    return float(((ours > theirs).sum() + 0.5 * (ours == theirs).sum()) / len(ours))
++
++
++def equity_vs_random(hole: Sequence[int], board: Sequence[int], iters: int,
++                     rng: np.random.Generator) -> float:
++    """P(win) + 0.5 P(tie) vs a random 5-card hand, rolling out the board.
++
++    iters <= 0: no sampling; the deterministic zero-budget estimate (module docstring).
++    """
++    if iters <= 0:
++        return _zero_budget_equity(hole, board)
++    need = 5 - len(board)
++    draw = _sample(_unseen(hole, board), 5 + need, iters, rng)
++    opp = draw[:, :5]
++    boards = np.empty((iters, 5), dtype=np.intp)
++    boards[:, :len(board)] = np.asarray(board, dtype=np.intp)
++    boards[:, len(board):] = draw[:, 5:]
++    holes = np.broadcast_to(np.asarray(hole, dtype=np.intp), (iters, 5))
++    return _score(fasteval.omaha_batch(holes, boards), fasteval.omaha_batch(opp, boards))
++
++
++def strength_now(hole: Sequence[int], board: Sequence[int], iters: int,
++                 rng: np.random.Generator) -> float:
++    """Win + half-tie rate of our made hand vs random hands on the current board.
++
++    iters <= 0: no sampling; the deterministic zero-budget estimate (module docstring).
++    """
++    if len(board) not in (3, 4, 5):
++        raise ValueError("strength_now needs a board of 3, 4 or 5 cards")
++    if iters <= 0:
++        return _made_hand_estimate(hole, board)
++    opp = _sample(_unseen(hole, board), 5, iters, rng)
++    boards = np.broadcast_to(np.asarray(board, dtype=np.intp), (iters, len(board)))
++    holes = np.broadcast_to(np.asarray(hole, dtype=np.intp), (iters, 5))
++    return _score(fasteval.made_now_batch(holes, boards), fasteval.made_now_batch(opp, boards))
++
++
++_PAIR_CACHE: dict[int, np.ndarray] = {}
++_TRI_CACHE: dict[int, np.ndarray] = {}
++
++
++def _pairs(n: int) -> np.ndarray:
++    p = _PAIR_CACHE.get(n)
++    if p is None:
++        p = _PAIR_CACHE[n] = np.array(list(combinations(range(n), 2)), dtype=np.intp)
++    return p
++
++
++def _tris(w: int) -> np.ndarray:
++    t = _TRI_CACHE.get(w)
++    if t is None:
++        t = _TRI_CACHE[w] = np.array(list(combinations(range(w), 3)), dtype=np.intp)
++    return t
++
++
++def nut_flags(hole: Sequence[int], board: Sequence[int]) -> int:
++    """Bitmask: 1 nuts-now, 2 board paired, 4 flush possible, 8 ace-flush holding."""
++    w = len(board)
++    if w == 0:
++        return 0
++    b = np.asarray(board, dtype=np.intp)
++    h = np.asarray(hole, dtype=np.intp)
++    flags = 0
++
++    ours = int(fasteval.made_now_batch(h[None, :], b[None, :])[0])
++    unseen = _unseen(hole, board)
++    pr = unseen[_pairs(len(unseen))]                    # (M,2)
++    tri = b[_tris(w)]                                   # (T,3)
++    M, T = len(pr), len(tri)
++    cards = np.concatenate([np.repeat(pr, T, axis=0), np.tile(tri, (M, 1))], axis=1)
++    best = int(fasteval.score5_batch(cards).max())
++    if ours >= best:
++        flags |= 1
++
++    br = b >> 2
++    if len(np.unique(br)) < w:
++        flags |= 2
++    bsuit = np.bincount(b & 3, minlength=4)
++    if bsuit.max() >= 3:
++        flags |= 4
++    hsuit = np.bincount(h & 3, minlength=4)
++    for s in range(4):
++        if hsuit[s] >= 2 and bsuit[s] >= 2 and (_ACE * 4 + s) in set(map(int, h)):
++            flags |= 8
++            break
++    return flags
+diff --git a/bot/exploit.py b/bot/exploit.py
+new file mode 100644
+index 0000000..364afec
+--- /dev/null
++++ b/bot/exploit.py
+@@ -0,0 +1,147 @@
++"""Exploit layer: reversible, evidence-gated modifiers of the base action (Task 14).
++
++apply_exploits(base, obs, feats, opp, rng) runs last in PolicyBot's chain: the base comes
++from the blueprint or the heuristic, and this layer may change it. opp is the half's
++OpponentModel (bot/opponent.py). At most one mode applies, chosen by detector precedence
++check-folder > maniac > station: station and maniac both fire on never-fold,
++always-raise bots.
++
++- check-folder (I2): RAISE_HALF whenever it is legal, else the base. Against a bot
++  whose bank ran out, every bet takes the pot.
++- maniac: the heuristic re-run with the call threshold MANIAC_CALL_SHIFT lower:
++  call_margin and the assumed bet range drop by it, and the weight of the range model
++  drops to MANIAC_RANGE_WEIGHT. Facing a bet those two dominate call_margin (Task 10).
++  Bluffs are off.
++- station: the heuristic re-run with value_raise and thin_value STATION_VALUE_SHIFT
++  lower (thinner value: v1's unopened bets come from thin_value) and bluffs off.
++- I6 (any mode): on the river, facing at least a BIG_BET_FRACTION-pot bet, fold
++  instead of calling when the weakest category the opponent showed down after betting
++  or raising the river (>= SHOWDOWN_MIN_N showdowns) is at least I6_CATEGORY_MARGIN
++  above our made category. Never with the nuts. River only: on earlier streets its
++  showdown hand is the river's, and it is seen only when the hand got there.
++  The plan's literal rule is "shown >= ours" (margin 0). On TRAIN every margin-0 fold
++  was a same-category spot, where kickers decide; calling would have won 6 of 11, at
++  25-33% pot odds. Margin 1 folds only hands below every category it has shown.
++
++Safety against adaptive bots: every mode reads the detectors' current evidence on every
++call, so it stops as soon as the evidence does (the detectors read recent windows). No
++mode adds a link between bet size and hand strength: check-folder bets one size with
++every hand, and the re-run modes keep the heuristic's own sizing rule. The re-run modes
++never fold a hand the base plays on, and no mode draws from rng: a decision the layer
++leaves alone is exactly v1's, and so is the rest of the Monte Carlo stream. The re-run
++modes need Features, so with a blueprint base (feats None) only check-folder and I6
++apply.
++
++Module state is read-only. stats (optional) is a dict of STAT_KEYS counters.
++"""
++
++from __future__ import annotations
++
++import dataclasses
++
++from bot import equity
++from bot.heuristic import HeuristicParams, heuristic_action
++from evaluator import omaha_score
++from game import Action, Street
++
++STATION_VALUE_SHIFT = 0.08       # station: value_raise and thin_value lowered by this
++MANIAC_CALL_SHIFT = 0.06         # maniac: call_margin and bet_range lowered by this
++MANIAC_RANGE_WEIGHT = 0.5        # maniac: range_weight capped here (+1.3/+1.4 bb, Task 10)
++BIG_BET_FRACTION = 0.4           # I6: to_call / pot before the bet; a half-pot bet is 0.5
++I6_CATEGORY_MARGIN = 1           # I6: fold when its weakest shown category >= ours + this
++_CATEGORY_SHIFT = 20             # omaha_score's category bits
++
++STAT_KEYS = ("decisions", "check_folder", "maniac", "station", "check_folder_changed",
++             "maniac_changed", "station_changed", "i6")
++
++_FOLD, _CALL, _HALF = Action.FOLD, Action.CHECK_CALL, Action.RAISE_HALF
++
++
++def station_params(p: HeuristicParams) -> HeuristicParams:
++    """Station mode: thinner value bets and raises, no bluffs."""
++    return dataclasses.replace(
++        p, value_raise=tuple(v - STATION_VALUE_SHIFT for v in p.value_raise),
++        thin_value=tuple(v - STATION_VALUE_SHIFT for v in p.thin_value), bluff_freq=0.0)
++
++
++def maniac_params(p: HeuristicParams) -> HeuristicParams:
++    """Maniac mode: call wider (a lower call threshold and a wider assumed bet range,
++    weighted less), no bluffs."""
++    return dataclasses.replace(
++        p, call_margin=p.call_margin - MANIAC_CALL_SHIFT,
++        bet_range=tuple(t - MANIAC_CALL_SHIFT for t in p.bet_range),
++        range_weight=min(p.range_weight, MANIAC_RANGE_WEIGHT), bluff_freq=0.0)
++
++
++_SHIFTED = {"maniac": maniac_params, "station": station_params}
++
++
++class _NoDraw:
++    """The rng of a re-run with bluff_freq 0: the bluff draw cannot change the answer,
++    so the caller's generator is left untouched."""
++
++    __slots__ = ()
++
++    @staticmethod
++    def random() -> float:
++        return 1.0
++
++
++_NO_DRAW = _NoDraw()
++
++
++def active_mode(opp) -> str | None:
++    """The mode opp's current evidence calls for, by precedence; None for none."""
++    if opp is None:
++        return None
++    if opp.is_check_folder():
++        return "check_folder"
++    if opp.is_maniac():
++        return "maniac"
++    if opp.is_station():
++        return "station"
++    return None
++
++
++def _beaten_river_call(obs, feats, opp) -> bool:
++    """I6: calling this river bet loses to every hand the opponent has shown for it."""
++    if obs.street != Street.RIVER or obs.to_call <= 0 or _FOLD not in obs.legal_actions:
++        return False
++    before = obs.pot - obs.to_call
++    if before <= 0 or obs.to_call / before < BIG_BET_FRACTION:
++        return False
++    shown = opp.showdown_min_category(opp.current_class(obs))
++    if shown is None:
++        return False
++    nut = feats.nut if feats is not None else equity.nut_flags(obs.hole_cards, obs.board)
++    if nut & 1:
++        return False
++    ours = omaha_score(obs.hole_cards, obs.board) >> _CATEGORY_SHIFT
++    return shown >= ours + I6_CATEGORY_MARGIN
++
++
++def apply_exploits(base: Action, obs, feats, opp, rng, params: HeuristicParams | None = None,
++                   stats: dict | None = None) -> Action:
++    """The base action, modified by the mode the opponent model's evidence supports (see
++    the module docstring). params are the heuristic's (default HeuristicParams()). Returns
++    an Action; PolicyBot keeps the base if it is not legal."""
++    if opp is None:
++        return base
++    mode = active_mode(opp)
++    action = base
++    if mode == "check_folder":
++        if _HALF in obs.legal_actions:
++            action = _HALF
++    elif mode is not None and feats is not None:
++        p = params if params is not None else HeuristicParams()
++        alt = heuristic_action(obs, feats, _SHIFTED[mode](p), _NO_DRAW)
++        if not (alt == _FOLD and base != _FOLD):     # loosen or re-size, never fold more
++            action = alt
++    i6 = action == _CALL and _beaten_river_call(obs, feats, opp)
++    if stats is not None:
++        stats["decisions"] += 1
++        if mode is not None:
++            stats[mode] += 1
++            stats[mode + "_changed"] += action != base
++        stats["i6"] += i6
++    return _FOLD if i6 else action
+diff --git a/bot/fasteval.py b/bot/fasteval.py
+new file mode 100644
+index 0000000..b1c6b8b
+--- /dev/null
++++ b/bot/fasteval.py
+@@ -0,0 +1,127 @@
++"""Vectorized numpy Short Deck hand evaluator, exactly equal to evaluator.py.
++
++Encoding: a five-card hand's rank multiset is keyed by key = sum(5**rank) over
++its cards (per-rank counts are at most 4, so this is a collision-free base-5
++number, no sorting needed). A flush adds OFF = 5**9 to the index. TABLE is an
++int32[2 * 5**9] filled from evaluator._score_ranks (unreachable slots are 0).
++
++For Omaha the key splits additively into a hole-pair part and a board-triple
++part, so the 100 combinations are one broadcast add of (N,10,1) + (N,1,10).
++"""
++
++from __future__ import annotations
++
++from itertools import combinations, combinations_with_replacement
++
++import numpy as np
++
++import evaluator as _ev
++
++OFF = 5 ** 9
++PAIR_IDX = np.array(list(combinations(range(5), 2)), dtype=np.intp)      # (10, 2)
++TRIPLE_IDX = np.array(list(combinations(range(5), 3)), dtype=np.intp)    # (10, 3)
++
++_POW5 = (5 ** np.arange(9)).astype(np.int32)
++# Per-card lookups (cards 0..35): rank power, suit.
++_CARD_POW = np.repeat(_POW5, 4)
++_CARD_SUIT = np.tile(np.arange(4, dtype=np.int8), 9)
++
++_TABLE: np.ndarray | None = None
++
++
++def _build_table() -> np.ndarray:
++    table = np.zeros(2 * OFF, dtype=np.int32)
++    for ranks in combinations_with_replacement(range(8, -1, -1), 5):  # descending
++        if ranks.count(ranks[0]) == 5:
++            continue
++        key = sum(5 ** r for r in ranks)
++        table[key] = _ev._score_ranks(ranks, False)
++        if len(set(ranks)) == 5:
++            table[key + OFF] = _ev._score_ranks(ranks, True)
++    return table
++
++
++def warmup() -> None:
++    """Build the lookup table (idempotent, ~10 ms)."""
++    global _TABLE
++    if _TABLE is None:
++        _TABLE = _build_table()
++
++
++def _table() -> np.ndarray:
++    if _TABLE is None:
++        warmup()
++    return _TABLE
++
++
++def _prep(a) -> np.ndarray:
++    a = np.asarray(a)
++    return a if a.dtype == np.intp else a.astype(np.intp)
++
++
++def score5_batch(cards: np.ndarray) -> np.ndarray:
++    """(N,5) distinct cards 0..35 -> (N,) int32 scores equal to score_five.
++
++    Any other shape raises ValueError.
++    """
++    c = _prep(cards)
++    if c.ndim != 2 or c.shape[1] != 5:
++        raise ValueError(f"score5_batch needs cards of shape (N, 5), got {c.shape}")
++    key = _CARD_POW[c].sum(axis=1, dtype=np.int32)
++    s = _CARD_SUIT[c]
++    flush = (s == s[:, :1]).all(axis=1)
++    return _table()[key + flush * np.int32(OFF)]
++
++
++_TRIPLES = {w: np.array(list(combinations(range(w), 3)), dtype=np.intp) for w in (3, 4, 5)}
++
++
++def _best_of(holes: np.ndarray, boards: np.ndarray, widths: tuple) -> np.ndarray:
++    """Best 2-hole + 3-board score per row.
++
++    holes (Nh,5) and boards (Nb,w) with w in widths. Nh == Nb pairs row i with row i.
++    A single row on either side (Nh == 1 or Nb == 1) is paired with every row of the
++    other side, so the result has the other side's row count (a single row against
++    zero rows gives zero). Anything else raises ValueError: a wrong shape must never
++    collapse into a single, silently wrong, score.
++    """
++    h = _prep(holes)
++    b = _prep(boards)
++    if h.ndim != 2 or h.shape[1] != 5:
++        raise ValueError(f"holes must have shape (N, 5), got {h.shape}")
++    if b.ndim != 2 or b.shape[1] not in widths:
++        raise ValueError(f"boards must have shape (N, w) with w in {widths}, got {b.shape}")
++    nh, nb = h.shape[0], b.shape[0]
++    if nh != nb and nh != 1 and nb != 1:
++        raise ValueError(f"{nh} holes vs {nb} boards: row counts must match, "
++                         "or one side must be a single row")
++    n = nb if nh == 1 else nh
++    tri = _TRIPLES[b.shape[1]]
++    hp, bp, hs, bs = _CARD_POW[h], _CARD_POW[b], _CARD_SUIT[h], _CARD_SUIT[b]
++    pk = hp[:, PAIR_IDX[:, 0]] + hp[:, PAIR_IDX[:, 1]]                   # (Nh,10)
++    tk = bp[:, tri[:, 0]] + bp[:, tri[:, 1]] + bp[:, tri[:, 2]]          # (Nb,T)
++    # suit code of a group if monochrome, else a code that never matches
++    a, c = hs[:, PAIR_IDX[:, 0]], hs[:, PAIR_IDX[:, 1]]
++    ps = np.where(a == c, a, np.int8(4))
++    x, y, z = bs[:, tri[:, 0]], bs[:, tri[:, 1]], bs[:, tri[:, 2]]
++    ts = np.where((x == y) & (y == z), x, np.int8(5))
++    idx = pk[:, :, None] + tk[:, None, :]                                # (n,10,T)
++    idx += (ps[:, :, None] == ts[:, None, :]) * np.int32(OFF)
++    return _table().take(idx).reshape(n, idx.shape[1] * idx.shape[2]).max(axis=1)
++
++
++def omaha_batch(holes: np.ndarray, boards: np.ndarray) -> np.ndarray:
++    """(N,5) holes, (N,5) boards -> (N,) int32, equal to omaha_score row by row.
++
++    Either side may be a single row, (1,5), paired with every row of the other side.
++    Other shapes, including boards that are not 5 cards wide, raise ValueError.
++    """
++    return _best_of(holes, boards, (5,))
++
++
++def made_now_batch(holes: np.ndarray, boards: np.ndarray) -> np.ndarray:
++    """Best hand from exactly 2 hole + 3 board cards; board width 3, 4 or 5.
++
++    Same row rules as omaha_batch: equal row counts, or a single row on either side.
++    """
++    return _best_of(holes, boards, (3, 4, 5))
+diff --git a/bot/features.py b/bot/features.py
+new file mode 100644
+index 0000000..788267e
+--- /dev/null
++++ b/bot/features.py
+@@ -0,0 +1,157 @@
++"""Decision features for the heuristic policy (and the layers built on it later).
++
++compute_features(obs, iters, rng) turns an Observation into a frozen Features record:
++- preflop: eq = now = the preflop table value (equity vs a random hand, 3,000 rollouts
++  per hand class offline), nut = 0;
++- postflop: eq = equity_vs_random with `iters` rollouts, nut = nut_flags, and now =
++  strength_now's deterministic estimate (no rollouts). No policy reads `now`; its
++  rollouts were 20-30% of flop/turn compute (T10 review M7, ablated in Task 12), so every
++  rollout goes to eq. On the river eq is already our made hand's strength: now = eq.
++`iters` comes from the caller's time manager. iters <= 0 means no Monte Carlo: eq uses
++bot.equity's cheap deterministic estimate too (then eq == now) and rng is left untouched.
++
++Module state is read-only; everything per-half lives with the caller.
++"""
++
++from __future__ import annotations
++
++import math
++from dataclasses import dataclass
++
++import numpy as np
++
++from bot import equity, preflop
++from game import Action, Observation, Street
++
++_RAISES = (Action.RAISE_HALF, Action.RAISE_POT)
++
++# Range model: P(we win at showdown | our equity vs random `eq`, our nut bits, and an
++# opponent whose own equity vs random is >= t). Logistic per street on a grid of t:
++#   logit P = a + b * logit(eq) + c * [nuts now] + d * [flush possible, not the nuts]
++# Fitted offline (python -m train.fit_range_model --spots 100000, seed 20261107) on
++# 100,000 random spots per street, both equities from 128 rollouts.
++# Rows are t = 0.0, 0.1, ..., 0.9; t is interpolated linearly.
++_RANGE_COEF = (
++    # FLOP
++    ((-0.01, 0.90, 0.22, 0.05), (-0.02, 0.90, 0.21, 0.05), (-0.04, 0.91, 0.21, 0.03),
++     (-0.13, 0.90, 0.19, -0.17), (-0.36, 0.89, 0.12, -0.84), (-0.73, 0.91, 0.20, -1.22),
++     (-1.15, 0.94, 0.42, -1.16), (-1.59, 0.97, 0.61, -1.24), (-2.05, 0.94, 0.80, -1.12),
++     (-2.87, 0.92, 0.61, -0.91)),
++    # TURN
++    ((-0.01, 0.94, 0.21, -0.03), (-0.02, 0.94, 0.21, -0.04), (-0.10, 0.95, 0.19, -0.19),
++     (-0.30, 0.98, 0.19, -0.52), (-0.67, 1.03, 0.25, -0.83), (-1.12, 1.09, 0.41, -0.89),
++     (-1.58, 1.12, 0.67, -0.96), (-1.97, 1.07, 1.03, -1.14), (-2.41, 0.95, 1.45, -1.11),
++     (-3.04, 0.83, 1.66, -1.30)),
++    # RIVER
++    ((0.01, 0.98, 0.61, 0.04), (-0.39, 1.20, -0.13, 0.04), (-0.82, 1.38, -0.62, 0.03),
++     (-1.32, 1.54, -0.93, 0.04), (-1.82, 1.66, -1.12, -0.05), (-2.58, 1.80, -1.25, -0.02),
++     (-3.35, 1.93, -1.20, -0.07), (-4.68, 2.15, -1.21, -0.07), (-5.84, 2.27, -0.81, -0.21),
++     (-7.07, 2.07, 0.45, -0.35)),
++)
++
++
++def range_equity(street: int, eq: float, nut: int, t: float) -> float:
++    """Equity vs an opponent range {equity vs random >= t} (postflop streets 1..3).
++
++    t is clipped to [0, 0.9]; eq to [0.005, 0.995] before the logit.
++    """
++    rows = _RANGE_COEF[int(street) - 1]
++    k = min(max(t, 0.0), 0.9) * 10.0
++    i = min(int(k), 8)
++    w = k - i
++    lo, hi = rows[i], rows[i + 1]
++    a, b, c, d = (lo[j] + w * (hi[j] - lo[j]) for j in range(4))
++    e = min(max(eq, 0.005), 0.995)
++    x = a + b * math.log(e / (1.0 - e))
++    if nut & 1:
++        x += max(c, 0.0)      # never below a non-nut hand of the same eq (river fit < 0: ties)
++    elif nut & 4:
++        x += d
++    return 1.0 / (1.0 + math.exp(-x))
++
++
++@dataclass(frozen=True)
++class Features:
++    """What the heuristic decides from.
++
++    street                  the betting round
++    pre                     preflop strength of our hole (any street); None if unavailable
++    eq                      equity vs a random hand (preflop: the table value)
++    now                     strength of our made hand vs random hands on this board
++                            (deterministic estimate; on the river, eq)
++    nut                     bot.equity.nut_flags bits (0 preflop): 1 nuts now, 2 paired
++                            board, 4 flush possible, 8 ace-flush holding
++    spr                     effective stack behind after matching the bet, over the pot
++                            after matching it
++    pot_odds                share of the final pot we put in by calling (0 when free)
++    in_position             we are the button, so we act last after the flop
++    opp_raised_this_street  opponent bets/raises on this street
++
++    Added (all default to "unknown/none" so the brief's constructor still works):
++    opp_raises_before       opponent bets/raises on earlier streets of this hand
++    my_raised_this_street   our own bets/raises on this street
++    facing_frac             to_call / pot before the opponent's last bet (0 when free)
++    iters                   rollouts used for eq (0: deterministic estimate)
++    """
++
++    street: Street
++    pre: float | None
++    eq: float
++    now: float
++    nut: int
++    spr: float
++    pot_odds: float
++    in_position: bool
++    opp_raised_this_street: int
++    opp_raises_before: int = 0
++    my_raised_this_street: int = 0
++    facing_frac: float = 0.0
++    iters: int = 0
++
++
++def _preflop_value(hole) -> float | None:
++    try:
++        return preflop.preflop_strength(hole)
++    except Exception:          # missing/corrupt table or an impossible hole: no prior
++        return None
++
++
++def compute_features(obs: Observation, iters: int, rng: np.random.Generator) -> Features:
++    """Features for obs. Raises ValueError only for a board that is not 0, 3, 4 or 5 cards."""
++    hole, board = obs.hole_cards, obs.board
++    pre = _preflop_value(hole)
++    nb = len(board)
++    if nb == 0:
++        eq = now = pre if pre is not None else 0.5
++        nut = 0
++        iters = 0
++    elif nb in (3, 4, 5):
++        iters = max(int(iters), 0)
++        eq = equity.equity_vs_random(hole, board, iters, rng)
++        now = eq if (iters == 0 or nb == 5) else equity.strength_now(hole, board, 0, rng)
++        nut = equity.nut_flags(hole, board)
++    else:
++        raise ValueError(f"board must have 0, 3, 4 or 5 cards, got {nb}")
++
++    street = obs.street
++    opp_now = opp_before = mine = 0
++    for a in obs.action_history:
++        if a.action in _RAISES:
++            if a.is_me:
++                mine += a.street == street
++            elif a.street == street:
++                opp_now += 1
++            else:
++                opp_before += 1
++
++    pot = max(obs.pot, 1)
++    call = min(max(obs.to_call, 0), max(obs.my_stack, 0))
++    behind = min(obs.my_stack - call, obs.opp_stack)
++    spr = max(behind, 0) / (pot + call)
++    pot_odds = call / (pot + call) if call > 0 else 0.0
++    before_bet = pot - obs.to_call
++    facing = obs.to_call / before_bet if obs.to_call > 0 and before_bet > 0 else 0.0
++    return Features(street=street, pre=pre, eq=float(eq), now=float(now), nut=int(nut),
++                    spr=float(spr), pot_odds=float(pot_odds), in_position=bool(obs.is_button),
++                    opp_raised_this_street=opp_now, opp_raises_before=opp_before,
++                    my_raised_this_street=mine, facing_frac=float(facing), iters=iters)
+diff --git a/bot/heuristic.py b/bot/heuristic.py
+new file mode 100644
+index 0000000..f82f7fd
+--- /dev/null
++++ b/bot/heuristic.py
+@@ -0,0 +1,188 @@
++"""Parameterized heuristic policy: Features + HeuristicParams -> a legal Action.
++
++Preflop: raise first in at open_min (pot-sized at threebet_min), re-raise at threebet_min,
++otherwise call when strength minus a per-raise range discount beats the pot odds.
++
++Postflop, facing a bet: the opponent is modelled as betting with equity >= bet_range
++(+ raise_step per further raise), and our effective equity mixes the range model
++(bot.features.range_equity, weight range_weight) with the brief's linear form
++eq - range_discount * opp_raises; nonnut_penalty applies on paired/flush boards without
++the nuts. Raise above value_raise, call above pot odds + call_margin, else fold.
++Unopened: bet pot/half above value_raise, half above thin_value (lower in position after a
++check: such ranges are capped), and in position bluff with probability bluff_freq.
++Never folds when free; never folds the nuts on the river (raises them when it can).
++
++Module state is read-only; randomness comes only from the caller's numpy Generator.
++"""
++
++from __future__ import annotations
++
++import math
++from dataclasses import dataclass, fields
++from numbers import Real
++
++import numpy as np
++
++from bot.features import Features, range_equity
++from game import Action, Observation, Street
++
++FOLD, CALL, HALF, POT = Action.FOLD, Action.CHECK_CALL, Action.RAISE_HALF, Action.RAISE_POT
++
++
++@dataclass(frozen=True)
++class HeuristicParams:
++    """Tunable thresholds (equities are vs a random hand, in [0, 1]).
++
++    open_min        preflop: raise first in (button) at or above this strength
++    threebet_min    preflop: re-raise a raise at or above this strength
++    call_margin     call when effective equity > pot odds + call_margin
++    range_discount  per opponent raise this street, subtracted from equity (flop, turn, river)
++    value_raise     raise when effective equity exceeds this (flop, turn, river)
++    pot_vs_half_cut RAISE_POT above this effective equity, else RAISE_HALF
++    bluff_freq      bet this often with a hand too weak to value-bet, in position when checked to
++    nonnut_penalty  subtracted when the board is paired or flush-possible and we lack the nuts.
++                    Facing a bet on a flush-possible board it counts twice: the range
++                    model's d term already marks such a hand down (range_equity), and the
++                    penalty comes off the mixed equity on top (T10 review M6). Unopened it
++                    is the only marker. It is a tuned parameter like the rest.
++
++    Added:
++    range_weight    facing a bet postflop, weight of the range model (equity vs an opponent
++                    whose equity is >= bet_range); the rest keeps the linear discount. 0
++                    gives the brief's formula.
++    bet_range       assumed equity floor of the opponent's first bet/raise of a street
++                    (flop, turn, river)
++    raise_step      added to that floor per further raise this street
++    thin_value      unopened: bet half pot above this effective equity (flop, turn, river)
++    pre_discount    preflop: subtracted from our strength facing one raise; facing the
++                    k-th raise of the street, pre_discount * (1 + 0.5 * (k - 1))
++    ip_thin_shift   in position after the opponent checks: thin_value lowered by this
++
++    Every value must be a finite real number, and each per-street field a sequence of
++    exactly 3 (flop, turn, river); anything else raises ValueError naming the field, so a
++    bad parameter set fails where it is built instead of inside the policy, where the
++    layer would catch it and silently fall back. Numbers are stored as float and
++    sequences as tuples of float, so instances stay hashable.
++    """
++
++    open_min: float = 0.44
++    threebet_min: float = 0.53
++    call_margin: float = 0.02
++    range_discount: tuple = (0.10, 0.08, 0.06)
++    value_raise: tuple = (0.70, 0.75, 0.80)
++    pot_vs_half_cut: float = 0.85
++    bluff_freq: float = 0.10
++    nonnut_penalty: float = 0.08
++    range_weight: float = 0.7
++    bet_range: tuple = (0.50, 0.55, 0.55)
++    raise_step: float = 0.10
++    thin_value: tuple = (0.62, 0.64, 0.66)
++    pre_discount: float = 0.07
++    ip_thin_shift: float = 0.06
++
++    def __post_init__(self) -> None:
++        # Fast path: a finite float (x - x == 0 is False for inf and NaN) or a tuple of 3
++        # of them is already normal, so dataclasses.replace stays cheap.
++        for name in _SCALAR_FIELDS:
++            v = getattr(self, name)
++            if type(v) is not float or v - v != 0.0:
++                object.__setattr__(self, name, _finite(name, v))
++        for name in _STREET_FIELDS:
++            v = getattr(self, name)
++            if not (type(v) is tuple and len(v) == 3
++                    and all(type(x) is float and x - x == 0.0 for x in v)):
++                if isinstance(v, (str, bytes)) or not hasattr(v, "__len__") or len(v) != 3:
++                    raise ValueError(f"{name} must be 3 numbers (flop, turn, river), got {v!r}")
++                object.__setattr__(self, name, tuple(_finite(name, x) for x in v))
++
++
++_STREET_FIELDS = ("range_discount", "value_raise", "bet_range", "thin_value")
++_SCALAR_FIELDS = tuple(f.name for f in fields(HeuristicParams) if f.name not in _STREET_FIELDS)
++
++
++def _finite(name: str, x) -> float:
++    """x as a float; ValueError unless it is a finite real number (bool is not one)."""
++    if isinstance(x, bool) or not isinstance(x, Real) or not math.isfinite(x):
++        raise ValueError(f"{name} must be finite real numbers, got {x!r}")
++    return float(x)
++
++
++def _legal(obs: Observation, want: Action) -> Action:
++    """want if legal; a raise falls back to the other raise size, then to check/call.
++    Never folds when nothing is owed."""
++    legal = obs.legal_actions
++    if want == FOLD and obs.to_call <= 0:
++        want = CALL
++    if want in legal:
++        return want
++    if want in (HALF, POT):
++        other = POT if want == HALF else HALF
++        if other in legal:
++            return other
++    if CALL in legal:
++        return CALL
++    for a in legal:
++        if a != FOLD or obs.to_call > 0:
++            return a
++    return CALL
++
++
++def _preflop(obs: Observation, f: Features, p: HeuristicParams, can_raise: bool) -> Action:
++    e = f.eq
++    k = obs.raises_this_street                 # voluntary raises so far (blinds excluded)
++    if obs.to_call <= 0:                       # big blind, the button limped
++        if can_raise and e >= p.threebet_min:
++            return HALF
++        return CALL
++    if k == 0:                                 # button, first in
++        if can_raise and e >= p.open_min:
++            return POT if e >= p.threebet_min else HALF
++        return CALL if e > f.pot_odds + p.call_margin else FOLD
++    if can_raise and e >= p.threebet_min:
++        return POT
++    # Each raise narrows the raiser's range, by less every time (measured: top 40% of
++    # hands costs us ~0.065 equity, top 15% ~0.10, top 5% ~0.14).
++    eff = e - p.pre_discount * (1.0 + 0.5 * (k - 1))
++    return CALL if eff > f.pot_odds + p.call_margin else FOLD
++
++
++def _postflop(obs: Observation, f: Features, p: HeuristicParams, rng: np.random.Generator,
++              can_raise: bool) -> Action:
++    i = int(f.street) - 1
++    e = f.eq
++    r = f.opp_raised_this_street
++    nonnut = bool(f.nut & 0b110) and not (f.nut & 1)
++    river_nuts = f.street == Street.RIVER and bool(f.nut & 1)
++    if obs.to_call > 0:
++        if river_nuts:
++            return POT if can_raise else CALL  # never fold a hand that cannot lose
++        t = p.bet_range[i] + p.raise_step * max(obs.raises_this_street - 1, 0)
++        linear = e - p.range_discount[i] * r
++        w = p.range_weight
++        eff = w * range_equity(f.street, e, f.nut, t) + (1.0 - w) * linear
++        if nonnut:
++            eff -= p.nonnut_penalty
++        if can_raise and eff > p.value_raise[i]:
++            return POT if eff > p.pot_vs_half_cut else HALF
++        return CALL if eff > f.pot_odds + p.call_margin else FOLD
++    eff = 1.0 if river_nuts else e - (p.nonnut_penalty if nonnut else 0.0)
++    if can_raise:
++        if eff > p.value_raise[i]:
++            return POT if eff > p.pot_vs_half_cut else HALF
++        if eff > p.thin_value[i] - (p.ip_thin_shift if f.in_position else 0.0):
++            return HALF
++        if f.in_position and rng.random() < p.bluff_freq:
++            return HALF
++    return CALL
++
++
++def heuristic_action(obs: Observation, feats: Features, params: HeuristicParams,
++                     rng: np.random.Generator, opp=None) -> Action:
++    """A legal action for obs. `opp` (an opponent model, Task 13) is accepted and unused."""
++    legal = obs.legal_actions
++    can_raise = HALF in legal or POT in legal
++    if feats.street == Street.PREFLOP:
++        want = _preflop(obs, feats, params, can_raise)
++    else:
++        want = _postflop(obs, feats, params, rng, can_raise)
++    return _legal(obs, want)
+diff --git a/bot/opponent.py b/bot/opponent.py
+new file mode 100644
+index 0000000..30f1ca7
+--- /dev/null
++++ b/bot/opponent.py
+@@ -0,0 +1,393 @@
++"""Opponent model: how the opponent plays this half, plus reversible exploit detectors.
++
++One OpponentModel lives in the per-half memory: memory["opp"] = OpponentModel() in
++new_half. Call observe(obs) first thing in choose_action, and finish(result) in
++on_hand_end for every finished hand, in any order and in batches. Neither method ever
++raises: an exception in on_hand_end is an error, and 5 errors forfeit the match. Any
++failure is swallowed and counted in `errors`.
++
++Decisions. Each opponent decision is recorded with its street and facing_bet (the
++opponent owed chips when it acted), its action (fold, check/call, bet/raise), and
++whether a raise was legal for it then.
++- observe() replays obs.action_history from the first record it has not seen. Blinds are
++  not in the history: preflop starts with our blind as our street total. The stacks before
++  each record are rebuilt backwards from the stacks in obs, so "a raise was legal" (fewer
++  than raise_cap raises on the street, the opponent can more than call, we are not all-in)
++  needs no config.
++- finish() adds what the history cannot show, since HandResult has no action history
++  (F11). At most one opponent decision follows our last action in a hand:
++  - no showdown, we won, and we acted: our last action was a bet or raise and the
++    opponent folded to it;
++  - no showdown, we won, we never acted, and the pot is under two big blinds: we were the
++    big blind and the opponent folded its button preflop (the judge never asks us to act);
++  - showdown, and more chips went in after our last observation than our call: we bet or
++    raised and the opponent called it (maybe all-in for less);
++  - showdown after we checked first on the river: the opponent checked behind.
++  Results are keyed by hand_index: out-of-order results are fine, and a repeated
++  hand_index is ignored.
++
++Statistics (whole half): fold_to_bet(street) and raise_rate(street) as (rate, n), with
++rate 0.0 when n == 0, and vpip as (rate, n) over hands where the opponent made a preflop
++decision.
++
++Action class: (street, aggressive) as (int, bool), where aggressive means the opponent bet
++or raised at least once on that street of the hand. At each showdown, every street on which
++the opponent made a decision adds (class, category of omaha_score(opp_hole, board)).
++omaha_score's table must be built at startup (agent.py calls evaluator.warmup()).
++
++Detectors are computed from the current evidence on every call, so each turns off as soon
++as the evidence stops supporting it. Station and maniac read only the most recent
++decisions (STATION_WINDOW, MANIAC_WINDOW), so late in a half they turn off as fast as early.
++- is_check_folder(): the opponent's last CF_STREAK (12) bet-facing decisions were all
++  folds, and it has not bet or raised since the first of them. Any call, bet or raise
++  starts the run over. The brief's "0 raises in the last 40 decisions" is scoped to the
++  run on purpose: a bot that empties its bank mid-half raised shortly before, and a fixed
++  40-decision window delays detection against checkfold_after(50) to hands 60-77 (8 seeds;
++  1.3 opponent decisions per hand), past the required hand 70. The run detects at 60-61.
++- is_station(): postflop fold-to-bet < 0.05 over the last STATION_WINDOW bet-facing
++  postflop decisions, with n >= 60. Postflop only: preflop equities are compressed (F6),
++  so even folding bots almost never fold preflop.
++- is_maniac(): bet/raise rate > 0.55 over the last MANIAC_WINDOW decisions where a raise
++  was legal (all streets), with n >= 80.
++"""
++
++from __future__ import annotations
++
++from collections import deque
++
++from evaluator import omaha_score
++from game import BIG_BLIND, RAISE_CAP_PER_STREET
++
++_FOLD, _CALL = 0, 1             # Action.FOLD, Action.CHECK_CALL; both raises are >= 2
++_RAISE = 2
++_PREFLOP, _RIVER = 0, 3
++_STREETS = 4
++_CATEGORIES = 9                 # HIGH_CARD (0) .. STRAIGHT_FLUSH (8)
++_CATEGORY_SHIFT = 20
++
++CF_STREAK = 12                  # check-folder: bet-facing folds in a row, no bet/raise between
++STATION_MAX_FOLD = 0.05
++STATION_MIN_N = 60
++STATION_WINDOW = 150            # latest bet-facing postflop decisions
++MANIAC_MIN_RATE = 0.55
++MANIAC_MIN_N = 80
++MANIAC_WINDOW = 200             # latest decisions where a raise was legal
++SHOWDOWN_MIN_N = 5              # showdown_min_category answers only with this many samples
++MAX_OPEN_HANDS = 8              # unfinished hands kept (normally 1)
++
++
++def _positive_int(v, default: int) -> int:
++    return v if type(v) is int and v > 0 else default
++
++
++class _Hand:
++    """One hand we have observed and not finished yet."""
++
++    __slots__ = ("seen", "street", "my_total", "raises", "last", "acted", "aggr", "vpip")
++
++    def __init__(self, my_total: int = 0) -> None:
++        self.seen = 0               # action_history records already replayed
++        self.street = _PREFLOP      # street of the latest replayed record
++        self.my_total = my_total    # our chips in on that street
++        self.raises = 0             # bets and raises on that street
++        self.last = None            # our latest observation of the hand
++        self.acted = [False, False, False, False]   # the opponent decided on street s
++        self.aggr = [False, False, False, False]    # ... and bet or raised there
++        self.vpip = False           # the opponent put chips in voluntarily preflop
++
++
++class OpponentModel:
++    """Per-half opponent statistics and detectors. See the module docstring."""
++
++    def __init__(self, raise_cap: int = RAISE_CAP_PER_STREET, big_blind: int = BIG_BLIND) -> None:
++        # Bad arguments get the defaults: a raise in new_half forfeits the half.
++        self.raise_cap = _positive_int(raise_cap, RAISE_CAP_PER_STREET)
++        self._bb = _positive_int(big_blind, BIG_BLIND)
++        self._errors = 0                    # exceptions swallowed by observe/finish
++        self._n = 0                         # opponent decisions recorded
++        self._face_n = [0] * _STREETS       # bet-facing decisions per street
++        self._face_fold = [0] * _STREETS
++        self._raise_n = [0] * _STREETS      # decisions where a raise was legal
++        self._raise_k = [0] * _STREETS
++        self._vpip_n = 0
++        self._vpip_k = 0
++        self._sd: dict = {}                 # (street, aggressive) -> counts per category
++        self._hands: dict = {}              # hand_index -> _Hand, unfinished
++        self._done: set = set()             # finished hand indexes
++        self._streak = 0                    # bet-facing folds in a row, no bet/raise between
++        self._st_win: deque = deque(maxlen=STATION_WINDOW)
++        self._st_folds = 0
++        self._mn_win: deque = deque(maxlen=MANIAC_WINDOW)
++        self._mn_raises = 0
++
++    # ----- feeding -----------------------------------------------------------
++
++    def observe(self, obs) -> None:
++        """Record the opponent decisions in obs.action_history not seen yet."""
++        try:
++            self._observe(obs)
++        except Exception:
++            self._errors += 1
++
++    def finish(self, result) -> None:
++        """Infer the opponent's decision after our last action, and record showdowns."""
++        try:
++            self._finish(result)
++        except Exception:
++            self._errors += 1
++
++    def _observe(self, obs) -> None:
++        idx = obs.hand_index
++        if idx in self._done:
++            return
++        hands = self._hands
++        h = hands.get(idx)
++        hist = obs.action_history
++        n = len(hist)
++        if h is None:
++            bb = obs.big_blind
++            if type(bb) is int and bb > 0:
++                self._bb = bb
++            h = _Hand(self._bb // 2 if obs.is_button else self._bb)
++            hands[idx] = h
++            if len(hands) > MAX_OPEN_HANDS:
++                del hands[next(iter(hands))]        # the oldest unfinished hand
++        start = h.seen
++        if n < start:
++            return                                  # an older observation of this hand
++        h.seen = n                                  # a bad record is never replayed twice
++        h.last = obs
++        if n > start:
++            self._replay(h, hist[start:], obs.my_stack, obs.opp_stack)
++
++    def _replay(self, h: _Hand, new, my_stack: int, opp_stack: int) -> None:
++        m = len(new)
++        # Stacks just before each new record, rebuilt backwards from the stacks now.
++        stacks = [None] * m
++        me, op = my_stack, opp_stack
++        for k in range(m - 1, -1, -1):
++            r = new[k]
++            if r.is_me:
++                me += r.amount
++            else:
++                op += r.amount
++            stacks[k] = (me, op)
++        cap = self.raise_cap
++        street, my_total, raises = h.street, h.my_total, h.raises
++        for k in range(m):
++            r = new[k]
++            s = int(r.street)
++            a = int(r.action)
++            if not (0 <= s < _STREETS and 0 <= a <= 3):
++                continue
++            if s != street:
++                street, my_total, raises = s, 0, 0
++            if r.is_me:
++                my_total = r.street_total
++            else:
++                owed = my_total - (r.street_total - r.amount)
++                me, op = stacks[k]
++                self._record(h, s, owed > 0 or a == _FOLD, a, raises < cap and op > owed and me > 0)
++            if a >= _RAISE:
++                raises += 1
++        h.street, h.my_total, h.raises = street, my_total, raises
++
++    def _finish(self, res) -> None:
++        idx = res.hand_index
++        if idx in self._done:
++            return
++        self._done.add(idx)
++        h = self._hands.pop(idx, None)
++        won = res.winner == "me"
++        showdown = res.went_to_showdown
++        if h is None or h.last is None:
++            # We never acted. Only the button folding its first preflop decision ends a
++            # hand before the big blind acts; the pot is then the two blinds.
++            if won and not showdown and res.pot < 2 * self._bb:
++                self._record(_Hand(), _PREFLOP, True, _FOLD, True)
++            return
++        o = h.last
++        s = int(o.street)
++        if not 0 <= s < _STREETS:
++            return
++        added = res.pot - o.pot                     # chips in after our last observation
++        cap = self.raise_cap
++        if not showdown:
++            if won:
++                # Our last action was a bet or raise of `added`, and the opponent folded.
++                owed = o.my_bet + added - o.opp_bet
++                could = o.raises_this_street + 1 < cap and o.opp_stack > owed and o.my_stack > added
++                self._record(h, s, True, _FOLD, could)
++            return
++        call = min(o.to_call, o.my_stack)
++        if added == call:
++            # We checked or called. Only our river check as first to act leaves the
++            # opponent a decision: it checked behind.
++            if o.to_call == 0 and s == _RIVER and not any(r.street == _RIVER for r in o.action_history):
++                could = o.raises_this_street < cap and o.opp_stack > 0 and o.my_stack > 0
++                self._record(h, s, False, _CALL, could)
++        elif added > call:
++            # We bet or raised and the opponent called: find which raise matches the pot.
++            could = False
++            for to in o.raise_to.values():
++                mine, owed = to - o.my_bet, to - o.opp_bet
++                if mine + min(owed, o.opp_stack) == added:
++                    could = o.raises_this_street + 1 < cap and o.opp_stack > owed and o.my_stack > mine
++                    break
++            self._record(h, s, True, _CALL, could)
++        self._showdown(h, res)
++
++    def _showdown(self, h: _Hand, res) -> None:
++        hole, board = res.opp_hole, res.board
++        if hole is None or len(board) != 5:
++            return
++        cat = omaha_score(hole, board) >> _CATEGORY_SHIFT
++        if not 0 <= cat < _CATEGORIES:
++            return
++        sd = self._sd
++        for s in range(_STREETS):
++            if h.acted[s]:
++                key = (s, h.aggr[s])
++                counts = sd.get(key)
++                if counts is None:
++                    counts = sd[key] = [0] * _CATEGORIES
++                counts[cat] += 1
++
++    def _record(self, h: _Hand, s: int, facing: bool, a: int, could_raise: bool) -> None:
++        """Count one opponent decision on street s (action a as an int)."""
++        raised = a >= _RAISE
++        self._n += 1
++        if facing:
++            self._face_n[s] += 1
++            folded = a == _FOLD
++            if folded:
++                self._face_fold[s] += 1
++                self._streak += 1
++            else:
++                self._streak = 0
++            if s:
++                win = self._st_win
++                if len(win) == STATION_WINDOW:
++                    self._st_folds -= win[0]
++                win.append(folded)
++                self._st_folds += folded
++        if raised:
++            self._streak = 0
++        if could_raise:
++            self._raise_n[s] += 1
++            self._raise_k[s] += raised
++            win = self._mn_win
++            if len(win) == MANIAC_WINDOW:
++                self._mn_raises -= win[0]
++            win.append(raised)
++            self._mn_raises += raised
++        if s == _PREFLOP:
++            if not h.acted[0]:
++                self._vpip_n += 1
++            if not h.vpip and (raised or (facing and a == _CALL)):
++                h.vpip = True
++                self._vpip_k += 1
++        h.acted[s] = True
++        if raised:
++            h.aggr[s] = True
++
++    # ----- statistics --------------------------------------------------------
++
++    def fold_to_bet(self, street) -> tuple[float, int]:
++        """(fold rate, n) over the opponent's bet-facing decisions on `street` this half."""
++        return self._rate(self._face_fold, self._face_n, street)
++
++    def raise_rate(self, street) -> tuple[float, int]:
++        """(bet/raise rate, n) over its decisions on `street` where a raise was legal."""
++        return self._rate(self._raise_k, self._raise_n, street)
++
++    @staticmethod
++    def _rate(k: list, n: list, street) -> tuple[float, int]:
++        try:
++            s = int(street)
++        except Exception:
++            return (0.0, 0)
++        if not 0 <= s < _STREETS:
++            return (0.0, 0)
++        return (k[s] / n[s] if n[s] else 0.0, n[s])
++
++    @property
++    def errors(self) -> int:
++        """Exceptions observe() and finish() swallowed (bad input); 0 in normal play."""
++        return self._errors
++
++    @property
++    def decisions(self) -> int:
++        """Opponent decisions recorded this half, inferred ones included."""
++        return self._n
++
++    @property
++    def fold_streak(self) -> int:
++        """Bet-facing folds in a row, with no call, bet or raise since the first of them."""
++        return self._streak
++
++    @property
++    def vpip(self) -> tuple[float, int]:
++        """(share of hands it called or raised preflop, n hands with a preflop decision)."""
++        n = self._vpip_n
++        return (self._vpip_k / n if n else 0.0, n)
++
++    @property
++    def recent_postflop_fold_to_bet(self) -> tuple[float, int]:
++        """(fold rate, n) over the last STATION_WINDOW bet-facing postflop decisions."""
++        n = len(self._st_win)
++        return (self._st_folds / n if n else 0.0, n)
++
++    @property
++    def recent_raise_rate(self) -> tuple[float, int]:
++        """(bet/raise rate, n) over the last MANIAC_WINDOW decisions where a raise was legal."""
++        n = len(self._mn_win)
++        return (self._mn_raises / n if n else 0.0, n)
++
++    def showdown_count(self, action_class) -> int:
++        """Showdowns recorded for an action class (street, aggressive)."""
++        try:
++            counts = self._sd.get((int(action_class[0]), bool(action_class[1])))
++        except Exception:
++            return 0
++        return sum(counts) if counts else 0
++
++    def showdown_min_category(self, action_class, min_n: int = SHOWDOWN_MIN_N) -> int | None:
++        """Weakest category (0..8) the opponent showed down after this action class, or None
++        with fewer than min_n showdowns for it. action_class is (street, aggressive)."""
++        try:
++            counts = self._sd.get((int(action_class[0]), bool(action_class[1])))
++            if not counts or sum(counts) < max(1, min_n):
++                return None
++        except Exception:
++            return None
++        for cat, c in enumerate(counts):
++            if c:
++                return cat
++        return None
++
++    @staticmethod
++    def current_class(obs) -> tuple[int, bool] | None:
++        """The opponent's action class on obs.street so far (None if obs is unusable)."""
++        try:
++            s = int(obs.street)
++            return (s, any(not r.is_me and r.street == s and r.action >= _RAISE
++                           for r in obs.action_history))
++        except Exception:
++            return None
++
++    # ----- detectors ---------------------------------------------------------
++
++    def is_check_folder(self) -> bool:
++        """Folds to every bet and never bets: e.g. a bot that ran out of time bank."""
++        return self._streak >= CF_STREAK
++
++    def is_station(self) -> bool:
++        """Almost never folds to a postflop bet."""
++        n = len(self._st_win)
++        return n >= STATION_MIN_N and self._st_folds < STATION_MAX_FOLD * n
++
++    def is_maniac(self) -> bool:
++        """Bets or raises most of the time it can."""
++        n = len(self._mn_win)
++        return n >= MANIAC_MIN_N and self._mn_raises > MANIAC_MIN_RATE * n
+diff --git a/bot/policy.py b/bot/policy.py
+new file mode 100644
+index 0000000..61bab79
+--- /dev/null
++++ b/bot/policy.py
+@@ -0,0 +1,714 @@
++"""Layered policy: base = CFR blueprint else heuristic; exploits then modify the base.
++
++PolicyBot.choose_action (the module-level decide) runs, per decision:
++0. Opponent model: memory["opp"].observe(obs) first (bot/opponent.py, Task 13);
++   on_hand_end feeds it every finished hand with finish(result).
++1. Blueprint (Task 20): only if a blueprint is loaded, the street is in
++   blueprint_streets, and memory["config_ok"], meaning this half's game (stack, blinds,
++   raise cap) is the one in the blueprint's meta. node_of(obs) -> the actor's bucket for
++   (street, hole, board) -> Blueprint.act(node, bucket, legal, rng, purify). The bucket
++   is deterministic (bot/abstraction.py: the TimeManager's iters are passed but ignored)
++   and cached in memory["bucket"] per (street, hole, board), so a second decision on a
++   street costs only node_of and act. A node miss (an observation the betting tree cannot
++   show) gives no answer and is counted in memory["layers"]["node_miss"], not as a fault.
++2. Heuristic: compute_features + heuristic_action, whenever the blueprint gives no answer.
++   It reads every size from obs, so it also plays a retuned game.
++3. Exploits: bot.exploit.apply_exploits modifies the base action from step 1 or 2,
++   from the opponent model's evidence (Task 14). On a blueprint base:
++   - check-folder (RAISE_HALF when legal) and I6 (computes its own nut flag) need no
++     Features and apply as on a heuristic base;
++   - the maniac and station modes re-run the heuristic with shifted params, which needs
++     Features. They are computed (as the heuristic would, iters from the TimeManager)
++     only while one of those modes is active (exploit_features=True, the default), so the
++     common blueprint decision stays cheap. The re-run's guard keeps the blueprint's
++     action wherever the re-run would fold a hand the blueprint plays on: in those modes
++     v3 plays v2's validated exploit, never tighter than the blueprint.
++   - Preflop the heuristic layer always runs as the online CPU-factor sample (T11 M2,
++     below), so preflop Features are there for free.
++So base = blueprint else heuristic, and exploits then modify the base. memory["layers"]
++counts which base layer answered (blueprint, heuristic) and the node misses. Each layer has
++its own try/except and catches any Exception (a corrupt observation, a
++missing table, a bug). A layer must answer with a legal Action. Otherwise it counts a
++fault in memory["faults"] and the decision moves on: a failed base layer leaves the next
++base layer to answer, and a failed exploit keeps the base action. If no layer answers
++legally, the result is fallback_action(obs): CHECK_CALL when nothing is owed, else FOLD,
++filtered by legal_actions. Five errors forfeit the half, so nothing here raises.
++
++Time (rulings R9, R30a). TimeManager.begin()/end() wrap every choose_action in
++try/finally, so the per-request grace applies once per call. on_hand_end work is charged
++in full with add(dt). The grace (grace_for_cpu_factor) is sized by a CPU factor, where
++1.0 is the dev PC. warmup() times a fixed workload against its dev-PC time. During play,
++each preflop decision runs the preflop heuristic layer, a fixed workload that draws no
++random numbers, whichever layer answers (with a blueprint base its answer is discarded),
++and the median of the last 64 is compared with its dev-PC median. The larger of the two
++factors sizes the grace.
++
++Simulated slow CPU (ruling R30b). sim.match can emulate a CPU s times slower: it charges
++s x the measured time minus a grace of 1 ms - 0.25 ms * s, and sends s as
++config.time_scale (sim_time_scale; the judge's AgentConfig has none, so s = 1). The bot
++then measures what it would on such a CPU: its clock runs s times fast (decisions,
++on_hand_end and the online samples, which therefore read s times the factor), and the
++warmup factor, measured at this machine's speed, is multiplied by s. So the grace is
++1 ms - 0.25 ms * max(s * warmup factor, online factor). Both factors are at least s, so
++the bot's grace never exceeds the sim's and its own count stays at or above the sim's
++charge, as with the real judge. In-process sims read online factors of about 1-2.5
++times s (see PREFLOP_REF_S), so the bot over-counts there: the safe direction.
++
++State (R22). Module state is what warmup() loads: written once, read-only afterwards.
++Per-half state lives in memory (tm, time_scale, rng, opp, config_ok, cpu, faults,
++exploits: the exploit layer's bot.exploit.STAT_KEYS counters, layers, bucket). The
++blueprint and the betting tree are read-only module data from warmup. A PolicyBot holds
++only its settings. Never pickle bot.* objects during play: sim.match.load_bot_file runs each
++half on a private copy of the bot package, and pickle looks classes up in the caller's
++copy. For the same reason every import here sits at module top.
++"""
++
++from __future__ import annotations
++
++import json
++import math
++import time
++from collections import deque
++from dataclasses import dataclass
++from pathlib import Path
++from types import MappingProxyType
++
++import numpy as np
++
++import evaluator
++from bot import abstraction, equity, exploit, preflop, strategy
++from bot.exploit import apply_exploits
++from bot.features import compute_features
++from bot.heuristic import HeuristicParams, heuristic_action
++from bot.opponent import OpponentModel
++from bot.timing import TimeManager, grace_for_cpu_factor
++from bot.tree import get_tree, node_of
++from game import (BIG_BLIND, NUM_DEALS, RAISE_CAP_PER_STREET, SMALL_BLIND, STARTING_STACK,
++                  TIME_BANK_SECONDS, Action, Game, Observation, Street, make_deal)
++
++RNG_SEED = 20261107
++
++# The game a blueprint is trained for (the Task 15 tree uses the default constants).
++# config_ok compares the half's config with a loaded blueprint's own meta, or with this
++# when no blueprint is loaded.
++DEFAULT_META = MappingProxyType({"stack": STARTING_STACK, "sb": SMALL_BLIND,
++                                 "bb": BIG_BLIND, "cap": RAISE_CAP_PER_STREET})
++_CONFIG_KEYS = (("stack", "starting_stack"), ("sb", "small_blind"), ("bb", "big_blind"),
++                ("cap", "raise_cap"))
++# The auto base (Task 20b). The blueprint is the default base. Against an opponent that
++# almost never raises preflop (a passive bot) the heuristic base beats it: measured on TRAIN
++# the passive bots (preflop raise rate <= 0.10 after 400 hands) are where v2 > v3, while every
++# FIELD bot raises preflop 0.32-0.60 of the time it can. Enter the heuristic base at a rate
++# <= AUTO_ENTER over >= AUTO_MIN_N raise-legal preflop decisions, return to the blueprint at
++# a rate >= AUTO_EXIT (the band between keeps the current base).
++BASES = ("auto", "blueprint", "heuristic")
++DEFAULT_BASE = "auto"
++AUTO_MIN_N = 60
++AUTO_ENTER = 0.12
++AUTO_EXIT = 0.20
++
++FAULT_KINDS = ("blueprint", "heuristic", "exploit", "hand_end")
++LAYER_KEYS = ("blueprint", "heuristic", "node_miss")
++
++# The blueprint layer. BLUEPRINT_PATH is read by warmup; a missing file means no blueprint
++# (heuristic only), a corrupt or stale one is a failed warmup step. PURIFY: Blueprint.act
++# zeroes probabilities below this and renormalizes (I9).
++BLUEPRINT_PATH = strategy.DEFAULT_PATH
++PURIFY = 0.1
++_RERUN_MODES = frozenset({"maniac", "station"})   # exploit modes that need Features
++
++# CPU factor. 1.0 is the dev PC (Ryzen 7 9700X, WSL2, Python 3.12.3), measured 2026-11-07
++# on the quiet machine (load ~2), pinned with taskset -c 0-7. Re-measure both constants if
++# their workloads change.
++# - REFERENCE_WORKLOAD_S: best of REF_RUNS runs of reference_workload, as warmup times it;
++#   the median over 12 fresh processes (range 0.331-0.341 ms). With another job on CPUs
++#   8-15 (load 8.5) the same measurement read 0.413 ms: a busy PC is a slower CPU.
++# - PREFLOP_REF_S: median preflop heuristic-layer time (_heuristic_action, the sample the
++#   online estimate takes) in 3 real-judge halves of 1000 deals: judge_engine.py over HTTP
++#   to uvicorn agent.py, vs baseline random / calling station / always pot (medians 13.52,
++#   14.04, 13.72 us; 15.7-16.1 us at load 12-15). The sample depends on what ran just
++#   before it, so it must come from the real server: in-process sims read 13-34 us
++#   depending on the opponent's code, and the FastAPI TestClient 60 us. Sims therefore
++#   read online factors of about 1-2.5, which only shrinks the grace there (the safe
++#   direction).
++# F_MAX bounds the damage of a broken measurement: grace_for_cpu_factor(8) = -1 ms per call.
++F_MAX = 8.0
++REF_REPS = 20             # reference_workload repetitions per timed run (~0.35 ms)
++REF_RUNS = 60             # warmup keeps the best of this many runs (~25 ms in all)
++REFERENCE_WORKLOAD_S = 0.336e-3
++PREFLOP_REF_S = 13.7e-6
++WINDOW = 64               # online estimate: median of the last WINDOW preflop samples
++MIN_SAMPLES = 16          # ... once there are at least this many
++
++_clock = time.perf_counter
++
++
++class _ScaledClock:
++    """_clock times `scale`: every interval reads `scale` times as long, as on a CPU that
++    much slower. Looks _clock up per call."""
++
++    __slots__ = ("scale",)
++
++    def __init__(self, scale: float) -> None:
++        self.scale = scale
++
++    def __call__(self) -> float:
++        return _clock() * self.scale
++
++
++def sim_time_scale(config) -> float:
++    """The CPU slowdown a simulator emulates for this half (sim.match.SimAgentConfig);
++    1.0 for the judge's AgentConfig and for anything not a finite number > 0. Never
++    raises."""
++    try:
++        s = float(getattr(config, "time_scale", 1.0))
++    except Exception:
++        return 1.0
++    return s if 0.0 < s < math.inf else 1.0
++
++
++# ----------------------------------------------------------------------------- helpers
++
++def fallback_action(obs) -> Action:
++    """CHECK_CALL when nothing is owed, else FOLD. If that is not in obs.legal_actions:
++    CHECK_CALL, then any legal Action. Never raises."""
++    try:
++        want = Action.CHECK_CALL if obs.to_call == 0 else Action.FOLD
++    except Exception:
++        return Action.CHECK_CALL
++    try:
++        legal = obs.legal_actions
++        if want in legal:
++            return want
++        if Action.CHECK_CALL in legal:
++            return Action.CHECK_CALL
++        for a in legal:
++            if isinstance(a, Action):
++                return a
++    except Exception:
++        pass
++    return want
++
++
++def config_matches(config, meta) -> bool:
++    """True when config is the game meta describes: stack, blinds and raise cap.
++    The hand count and the time bank do not change the game. Never raises."""
++    try:
++        return all(meta[k] == getattr(config, attr) for k, attr in _CONFIG_KEYS)
++    except Exception:
++        return False
++
++
++def _legal(action, obs) -> bool:
++    try:
++        return isinstance(action, Action) and action in obs.legal_actions
++    except Exception:
++        return False
++
++
++def _fault(memory, kind: str) -> None:
++    try:
++        memory["faults"][kind] += 1
++    except Exception:
++        pass
++
++
++def _count(memory, key: str) -> None:
++    try:
++        memory["layers"][key] += 1
++    except Exception:
++        pass
++
++
++def _time_manager(memory) -> TimeManager | None:
++    try:
++        tm = memory["tm"]
++    except Exception:
++        return None
++    return tm if isinstance(tm, TimeManager) else None
++
++
++def _opponent(memory) -> OpponentModel | None:
++    try:
++        opp = memory["opp"]
++    except Exception:
++        return None
++    return opp if isinstance(opp, OpponentModel) else None
++
++
++def select_base(opp, current: str) -> str:
++    """The auto base for the next decision: "blueprint" or "heuristic", from the opponent's
++    preflop raise rate (module constants above) and the current base (hysteresis). Pure and
++    deterministic; any problem with opp means the blueprint."""
++    try:
++        rate, n = opp.raise_rate(Street.PREFLOP)
++        rate, n = float(rate), int(n)
++        if not 0.0 <= rate <= 1.0:
++            return "blueprint"
++        if current == "heuristic":
++            return "blueprint" if rate >= AUTO_EXIT else "heuristic"
++        return "heuristic" if n >= AUTO_MIN_N and rate <= AUTO_ENTER else "blueprint"
++    except Exception:
++        return "blueprint"
++
++
++def _clamp_factor(f: float) -> float:
++    """f floored at 1.0 and clamped to F_MAX; 1.0 (no adjustment) when f is not a number."""
++    if f != f:
++        return 1.0
++    return min(max(f, 1.0), F_MAX)
++
++
++# ------------------------------------------------------------------------- CPU factor
++
++def reference_workload(payload: str, reps: int = REF_REPS) -> None:
++    """A fixed stand-in for the server plumbing the bot cannot time: JSON in,
++    Observation.from_dict, to_dict, JSON out. It uses no data file."""
++    for _ in range(reps):
++        obs = Observation.from_dict(json.loads(payload)["observation"])
++        json.dumps({"observation": obs.to_dict(), "hand_end_errors": []})
++
++
++def measure_cpu_factor(reference_s: float | None = None, runs: int = REF_RUNS) -> float:
++    """Best of `runs` timings of reference_workload over its dev-PC time
++    (REFERENCE_WORKLOAD_S), floored at 1.0 and clamped to F_MAX. 1.0 if anything goes
++    wrong. Never raises."""
++    ref = REFERENCE_WORKLOAD_S if reference_s is None else reference_s
++    try:
++        payload = json.dumps({"observation": _warmup_spots()[-1].to_dict(), "hand_results": []})
++        best = math.inf
++        for _ in range(runs):
++            t0 = _clock()
++            reference_workload(payload)
++            best = min(best, _clock() - t0)
++        return _clamp_factor(best / ref) if best < math.inf else 1.0
++    except Exception:
++        return 1.0
++
++
++class CpuFactorEstimator:
++    """Online CPU factor: the median of the last WINDOW preflop heuristic-layer times over
++    their dev-PC median ref_s (default PREFLOP_REF_S), floored at 1.0 and clamped to F_MAX.
++
++    Preemption spikes cannot move a median. A sample that is not a finite positive number
++    is dropped. factor() is None until there are MIN_SAMPLES samples, or if ref_s is
++    unusable. Never raises.
++    """
++
++    __slots__ = ("ref_s", "_samples")
++
++    def __init__(self, ref_s: float | None = None) -> None:
++        self.ref_s = PREFLOP_REF_S if ref_s is None else ref_s
++        self._samples: deque = deque(maxlen=WINDOW)
++
++    @property
++    def n(self) -> int:
++        """Samples in the window."""
++        return len(self._samples)
++
++    def add(self, dt) -> None:
++        try:
++            v = float(dt)
++        except (TypeError, ValueError, OverflowError):
++            return
++        if 0.0 < v < math.inf:
++            self._samples.append(v)
++
++    def factor(self) -> float | None:
++        try:
++            s = self._samples
++            ref = float(self.ref_s)
++            if len(s) < MIN_SAMPLES or not 0.0 < ref < math.inf:
++                return None
++            return _clamp_factor(sorted(s)[len(s) // 2] / ref)
++        except Exception:
++            return None
++
++
++# ----------------------------------------------------------------------------- warmup
++
++@dataclass(frozen=True)
++class Warmup:
++    """What warmup() did: its duration, the measured CPU factor, the blueprint it loaded
++    (None for none), the names of the steps that failed, and the betting tree (None if
++    it failed to build)."""
++
++    seconds: float
++    cpu_factor: float
++    blueprint: object
++    failed: tuple
++    tree: object = None
++
++
++WARMUP: Warmup | None = None
++
++
++def _warmup_spots() -> list:
++    """Every decision of one fixed hand played down to showdown. The first actor bets half
++    pot on each postflop street, so all four streets and facing a bet are covered."""
++    g = Game(make_deal("policy-warmup", 0), 0)
++    spots, seen = [], set()
++    while not g.is_terminal:
++        obs = g.observation(g.to_act)
++        spots.append(obs)
++        bet = (obs.street not in seen and obs.street != Street.PREFLOP
++               and Action.RAISE_HALF in obs.legal_actions)
++        seen.add(obs.street)
++        g.apply(Action.RAISE_HALF if bet else Action.CHECK_CALL)
++    return spots
++
++
++def _touch_preflop() -> None:
++    preflop.preflop_strength((0, 4, 8, 12, 16))   # loads the table on first use
++
++
++def _touch_nut_flags() -> None:
++    # The first call per board width builds index caches, and the first np.unique call
++    # costs 3-4 ms on the dev PC.
++    hole = (0, 4, 8, 12, 16)
++    for w in (3, 4, 5):
++        equity.nut_flags(hole, tuple(range(20, 20 + w)))
++
++
++def _dummy_decisions() -> None:
++    rng = np.random.default_rng(RNG_SEED)
++    params = HeuristicParams()
++    for obs in _warmup_spots():
++        for iters in (0, 16):
++            heuristic_action(obs, compute_features(obs, iters, rng), params, rng)
++
++
++def _load_blueprint():
++    """The blueprint at BLUEPRINT_PATH (bot.strategy.Blueprint, verified against the
++    runtime's tree, rules and bucket table), or None when there is no file. Raises
++    ValueError for a corrupt or stale file, which warmup records as a failed step."""
++    path = Path(BLUEPRINT_PATH)
++    if not path.is_file():
++        return None
++    return strategy.Blueprint.load(path, tree=get_tree())
++
++
++def _blueprint_selftest(blueprint, tree) -> bool:
++    """Every warmup spot (all four streets, facing a bet) must map to a node and get a
++    legal action from the blueprint. This also touches every lazy cache of node_of,
++    bucket and act. Raises on any failure: warmup then drops the blueprint."""
++    rng = np.random.default_rng(RNG_SEED)
++    for obs in _warmup_spots():
++        node = node_of(obs, tree)
++        if node is None:
++            raise RuntimeError(f"warmup spot outside the betting tree: {obs.action_history}")
++        b = abstraction.bucket(obs.street, obs.hole_cards, obs.board)
++        a = blueprint.act(node, b, obs.legal_actions, rng, PURIFY)
++        if not _legal(a, obs):
++            raise RuntimeError(f"blueprint answered {a!r}, not in {obs.legal_actions}")
++    return True
++
++
++def warmup() -> None:
++    """Load every table and touch every lazy cache before the first request. The first
++    call in a process does the work; later calls return at once. Never raises: a failed
++    step is listed in WARMUP.failed, and the bot plays on without it (the heuristic has
++    defaults for a missing table). The blueprint is loaded only when the tree and the
++    bucket tables are, and kept only if it passes its self-test; else it is None and the
++    bot plays the heuristic (v2) everywhere."""
++    global WARMUP
++    if WARMUP is not None:
++        return
++    t0 = _clock()
++    failed = []
++
++    def step(name, fn):
++        try:
++            return fn()
++        except Exception:
++            failed.append(name)
++            return None
++
++    step("evaluator", evaluator.warmup)       # omaha_score's table (showdown scoring)
++    step("equity", equity.warmup)             # fasteval's table + the zero-budget reference
++    step("preflop", _touch_preflop)
++    step("nut_flags", _touch_nut_flags)
++    tree = step("tree", get_tree)             # the betting tree (~0.4 s)
++    step("abstraction", abstraction.warmup)   # bucket tables
++    blueprint = None
++    if tree is not None and "abstraction" not in failed:
++        blueprint = step("blueprint", _load_blueprint)
++        if blueprint is not None and not step("blueprint_selftest",
++                                              lambda: _blueprint_selftest(blueprint, tree)):
++            blueprint = None
++    step("decisions", _dummy_decisions)       # one compute_features + heuristic per spot
++    factor = measure_cpu_factor()             # last: everything above is warm by now
++    WARMUP = Warmup(_clock() - t0, factor, blueprint, tuple(failed), tree)
++
++
++# -------------------------------------------------------------------------- PolicyBot
++
++class PolicyBot:
++    """The shipped bot. BotLike: new_half / choose_action / on_hand_end.
++
++    params             heuristic thresholds (default HeuristicParams())
++    use_blueprint      consult the blueprint when one is loaded and the game matches it;
++                       False is v2 (the heuristic base, decision for decision)
++    base               "auto" (default), "blueprint" or "heuristic". Auto plays the blueprint
++                       until the opponent looks passive (select_base), then the heuristic
++                       (Task 20b)
++    use_exploits       run the exploit layer on the base action
++    purify             Blueprint.act's purification threshold (default PURIFY)
++    blueprint_streets  the streets on which the blueprint is consulted (default all)
++    exploit_features   with a blueprint base, compute Features for the maniac/station
++                       re-runs while such a mode is active (False: those modes do not
++                       apply to a blueprint base postflop)
++
++    The class itself and functools.partial(PolicyBot, ...) are picklable factories. The
++    instance keeps settings only; everything per half lives in memory.
++    """
++
++    def __init__(self, params: HeuristicParams | None = None, use_blueprint: bool = True,
++                 use_exploits: bool = True, purify: float = PURIFY,
++                 blueprint_streets=tuple(Street), exploit_features: bool = True,
++                 base: str = DEFAULT_BASE) -> None:
++        if base not in BASES:
++            raise ValueError(f"base must be one of {BASES}, not {base!r}")
++        warmup()                  # once per process (a sim factory call is untimed)
++        w = WARMUP
++        self.params = params if params is not None else HeuristicParams()
++        self.use_blueprint = bool(use_blueprint)
++        self.use_exploits = bool(use_exploits)
++        self.purify = float(purify)
++        self.base = base
++        self.blueprint_streets = frozenset(Street(s) for s in blueprint_streets)
++        self.exploit_features = bool(exploit_features)
++        self.blueprint = w.blueprint if self.use_blueprint and w is not None else None
++        self.tree = w.tree if w is not None else None
++        self.cpu_factor = w.cpu_factor if w is not None else 1.0
++
++    def new_half(self, config, memory: dict) -> None:
++        """Fresh per-half state. The same keys every time. Never raises.
++        config.time_scale (a simulator's emulated slow CPU) scales the bot's clock and
++        warmup factor (module docstring)."""
++        try:
++            bank, hands = config.time_bank_seconds, config.num_hands
++        except Exception:
++            bank, hands = TIME_BANK_SECONDS, NUM_DEALS
++        try:
++            cap, bb = config.raise_cap, config.big_blind
++        except Exception:
++            cap, bb = RAISE_CAP_PER_STREET, BIG_BLIND
++        try:
++            meta = DEFAULT_META if self.blueprint is None else self.blueprint.meta
++        except Exception:
++            meta = None
++        scale = sim_time_scale(config)
++        try:
++            memory["tm"] = TimeManager(bank_s=bank, hands=hands,
++                                       clock=_clock if scale == 1.0 else _ScaledClock(scale),
++                                       grace_s=grace_for_cpu_factor(self.cpu_factor * scale))
++            memory["time_scale"] = scale
++            memory["rng"] = np.random.default_rng(RNG_SEED)
++            memory["opp"] = OpponentModel(raise_cap=cap, big_blind=bb)   # bad values: defaults
++            memory["config_ok"] = config_matches(config, meta)
++            memory["cpu"] = CpuFactorEstimator()
++            memory["faults"] = dict.fromkeys(FAULT_KINDS, 0)
++            memory["exploits"] = dict.fromkeys(exploit.STAT_KEYS, 0)
++            memory["layers"] = dict.fromkeys(LAYER_KEYS, 0)
++            memory["base"] = "blueprint"    # the base in force (auto switches it per half)
++            memory["bucket"] = None         # ((street, hole, board), bucket) of the last lookup
++        except Exception:
++            pass
++
++    def choose_action(self, obs, memory: dict) -> Action:
++        """The layered decision (module docstring). Always a legal Action."""
++        tm = _time_manager(memory)
++        if tm is not None:
++            tm.begin()
++        try:
++            return self._decide(obs, memory, tm)
++        finally:
++            if tm is not None:
++                tm.end()
++
++    def on_hand_end(self, result, memory: dict) -> None:
++        """Feed the result to the opponent model and charge the time in full with add(dt)
++        (R9). Never raises: each raise would count as its own error."""
++        try:
++            tm = _time_manager(memory)
++            clock = tm.clock if tm is not None else _clock
++            t0 = clock()
++            opp = _opponent(memory)
++            if opp is not None:
++                opp.finish(result)          # never raises
++            if tm is not None:
++                tm.add(clock() - t0)
++        except Exception:
++            _fault(memory, "hand_end")
++
++    # ------------------------------------------------------------------- the layers
++
++    def _decide(self, obs, memory, tm) -> Action:
++        try:
++            opp = _opponent(memory)
++            if opp is not None:
++                opp.observe(obs)            # first: the layers read the updated model
++        except Exception:                   # observe() never raises; belt and braces
++            pass
++        base = feats = None
++        try:
++            config_ok = memory["config_ok"] is True
++        except Exception:
++            config_ok = False
++        if self.blueprint is not None and config_ok and self._use_blueprint_now(memory):
++            try:
++                base = self._blueprint_action(obs, memory)
++                if base is not None:
++                    if _legal(base, obs):
++                        _count(memory, "blueprint")
++                    else:
++                        _fault(memory, "blueprint")
++                        base = None
++            except Exception:
++                _fault(memory, "blueprint")
++                base = None
++        if base is None:
++            try:
++                feats, base = self._heuristic_action(obs, memory, tm)
++                if _legal(base, obs):
++                    _count(memory, "heuristic")
++                else:
++                    _fault(memory, "heuristic")
++                    base = None
++            except Exception:
++                _fault(memory, "heuristic")
++                base = None
++        else:
++            feats = self._blueprint_extras(obs, memory, tm)
++        action = base
++        if base is not None and self.use_exploits:
++            try:
++                a = self._exploit_action(base, obs, feats, memory)
++                if _legal(a, obs):
++                    action = a
++                else:
++                    _fault(memory, "exploit")
++            except Exception:
++                _fault(memory, "exploit")
++        return action if _legal(action, obs) else fallback_action(obs)
++
++    def _use_blueprint_now(self, memory) -> bool:
++        """Whether the blueprint is the base for this decision: always for base="blueprint",
++        never for "heuristic", and for "auto" what select_base says (memory["base"] holds
++        the base in force). Never raises: a failure means the blueprint."""
++        try:
++            if self.base == "heuristic":
++                return False
++            if self.base == "auto":
++                memory["base"] = select_base(_opponent(memory), memory.get("base"))
++                return memory["base"] == "blueprint"
++        except Exception:
++            pass
++        return True
++
++    def _blueprint_action(self, obs, memory):
++        """node_of -> bucket (cached per street, hole and board) -> Blueprint.act.
++        Returns an Action, or None for no answer (the heuristic then plays): a street
++        outside blueprint_streets, or a node miss. May raise; the caller counts a fault."""
++        street = obs.street
++        if street not in self.blueprint_streets:
++            return None
++        node = node_of(obs, self.tree)
++        if node is None:
++            _count(memory, "node_miss")
++            return None
++        key = (street, obs.hole_cards, obs.board)
++        cached = memory.get("bucket")
++        if cached is not None and cached[0] == key:
++            b = cached[1]
++        else:
++            tm = _time_manager(memory)
++            iters = tm.iters(obs.pot, street, obs.hand_index) if tm is not None else 0
++            b = abstraction.bucket(street, obs.hole_cards, obs.board, iters)
++            memory["bucket"] = (key, b)
++        return self.blueprint.act(node, b, obs.legal_actions, memory["rng"], self.purify)
++
++    def _blueprint_extras(self, obs, memory, tm):
++        """After the blueprint answered: Features for the exploit layer, or None.
++        Preflop the heuristic layer runs anyway as the online CPU sample (T11 M2; it draws
++        no random numbers there) and its Features are returned. Postflop Features are
++        computed only for an active maniac/station re-run (module docstring). Never
++        raises: a failure here only costs the exploit layer its Features."""
++        try:
++            if obs.street == Street.PREFLOP:
++                return self._heuristic_action(obs, memory, tm)[0]
++            if (self.use_exploits and self.exploit_features
++                    and exploit.active_mode(_opponent(memory)) in _RERUN_MODES):
++                iters = tm.iters(obs.pot, obs.street, obs.hand_index) if tm is not None else 0
++                return compute_features(obs, iters, memory["rng"])
++        except Exception:
++            pass
++        return None
++
++    def _heuristic_action(self, obs, memory, tm):
++        """(features, action). The time manager sizes the Monte Carlo. Preflop the work is
++        fixed (no Monte Carlo), so its time is also the online CPU-factor sample."""
++        clock = tm.clock if tm is not None else _clock
++        t0 = clock()
++        rng = memory["rng"]
++        iters = tm.iters(obs.pot, obs.street, obs.hand_index) if tm is not None else 0
++        feats = compute_features(obs, iters, rng)
++        action = heuristic_action(obs, feats, self.params, rng, memory["opp"])
++        if feats.street == Street.PREFLOP:
++            self._observe_cpu(memory, tm, clock() - t0)
++        return feats, action
++
++    def _exploit_action(self, base, obs, feats, memory):
++        """Exploit layer: bot.exploit.apply_exploits on the base, with this bot's heuristic
++        params and the half's counters. With a blueprint base feats is None postflop
++        unless a re-run mode is active (_blueprint_extras)."""
++        return apply_exploits(base, obs, feats, _opponent(memory), memory["rng"], self.params,
++                              memory.get("exploits"))
++
++    def _observe_cpu(self, memory, tm, dt: float) -> None:
++        """Add an online sample and resize the grace: the larger of the (time-scaled)
++        warmup and online factors. Never raises, so it can never cost the heuristic its
++        answer."""
++        try:
++            est = memory["cpu"]
++            est.add(dt)
++            f = est.factor()
++            if f is not None and tm is not None:
++                warm = self.cpu_factor * memory.get("time_scale", 1.0)
++                tm.grace_s = grace_for_cpu_factor(max(warm, f))
++        except Exception:
++            pass
++
++
++# ------------------------------------------------- the plan's module-level interface
++
++_DEFAULT_BOT: PolicyBot | None = None
++
++
++def _default_bot() -> PolicyBot:
++    global _DEFAULT_BOT
++    if _DEFAULT_BOT is None:
++        _DEFAULT_BOT = PolicyBot()
++    return _DEFAULT_BOT
++
++
++def start_half(config, memory: dict) -> None:
++    """PolicyBot().new_half: memory gets tm, rng, opp, config_ok (plus cpu and faults)."""
++    _default_bot().new_half(config, memory)
++
++
++def decide(obs, memory: dict) -> Action:
++    """PolicyBot().choose_action. Always a legal Action."""
++    try:
++        return _default_bot().choose_action(obs, memory)
++    except Exception:
++        return fallback_action(obs)
++
++
++def hand_finished(result, memory: dict) -> None:
++    """PolicyBot().on_hand_end. Never raises."""
++    try:
++        _default_bot().on_hand_end(result, memory)
++    except Exception:
++        pass
+diff --git a/bot/preflop.py b/bot/preflop.py
+new file mode 100644
+index 0000000..753f759
+--- /dev/null
++++ b/bot/preflop.py
+@@ -0,0 +1,51 @@
++"""Preflop strength table: equity vs a random hand for every 5-card hole."""
++
++from __future__ import annotations
++
++from itertools import permutations
++from pathlib import Path
++from typing import Sequence
++
++import numpy as np
++
++_DEFAULT_PATH = Path(__file__).resolve().parent.parent / "data" / "preflop.npz"
++_PERMS = tuple(permutations(range(4)))
++_MASKS: np.ndarray | None = None
++_STRENGTH: np.ndarray | None = None
++
++
++def canonical_key(hole: Sequence[int]) -> int:
++    """Suit-permutation-invariant key: lexicographic-min relabeling, packed base 36."""
++    best = None
++    for p in _PERMS:
++        cards = sorted((c & ~3) | p[c & 3] for c in hole)
++        if best is None or cards < best:
++            best = cards
++    key = 0
++    for c in best:
++        key = key * 36 + c
++    return key
++
++
++def load_preflop(path: str | Path | None = None) -> None:
++    """Load the table (raises FileNotFoundError with a clear message if absent)."""
++    global _MASKS, _STRENGTH
++    p = Path(path) if path is not None else _DEFAULT_PATH
++    if not p.is_file():
++        raise FileNotFoundError(f"preflop table not found: {p}")
++    with np.load(p) as z:
++        masks, strength = z["masks"], z["strength"]
++    _MASKS, _STRENGTH = masks, strength
++
++
++def preflop_strength(hole: Sequence[int]) -> float:
++    """Equity vs a random hand, by O(log n) lookup on the card bitmask."""
++    if _MASKS is None:
++        load_preflop()
++    m = 0
++    for c in hole:
++        m |= 1 << c
++    i = int(_MASKS.searchsorted(m))
++    if i >= len(_MASKS) or _MASKS[i] != m:
++        raise KeyError(f"hand not in preflop table: {list(hole)}")
++    return float(_STRENGTH[i])
+diff --git a/bot/strategy.py b/bot/strategy.py
+new file mode 100644
+index 0000000..91b59ef
+--- /dev/null
++++ b/bot/strategy.py
+@@ -0,0 +1,179 @@
++"""Runtime CFR blueprint: loads data/blueprint.npz and samples actions from it (Task 19).
++
++File format (written by train/export.py; FORMAT 1). The arrays are those of the trainer
++(train/mccfr.py, Layout), not regrouped per street:
++- probs: float16 [n_info, 4], the trainer's average strategy normalized over the legal
++  actions, columns in game.Action order, illegal actions exactly 0. Rows are node-major in
++  decision-node id order, so the infoset (node, bucket) is row offset[node] + bucket, and
++  offset = concatenate([0], cumsum(buckets[tree.street])) is recomputed at load from the
++  per-street bucket counts and the tree (the trainer's streets interleave along node ids,
++  hence no per-street slicing). An infoset the trainer never updated holds the uniform
++  distribution over the legal actions.
++- scalars: format, stack, sb, bb, cap, iterations, seed, linear, n_dec, n_term,
++  tree_child_sha256, buckets_sha256, features_sha256, buckets (the four per-street counts),
++  dataset_* (the T17 dataset's identity).
++
++Blueprint.load() verifies the file against the runtime: format, game constants, the tree
++(n_dec, n_term, sha256 of child.tobytes()), the sha256 of data/buckets.npz and its bucket
++counts, and the array shape. Any mismatch is a ValueError (a refit or a tree change
++invalidates the blueprint). Blueprint.try_load() / load_default() never raise: they return
++None, which the caller treats as "no blueprint" (heuristic only).
++
++Everything here is read-only: the table is non-writeable, meta is a mappingproxy, and there
++is no module-level mutable state. stdlib + numpy only.
++"""
++
++from __future__ import annotations
++
++import hashlib
++from pathlib import Path
++from types import MappingProxyType
++
++import numpy as np
++
++import game
++from bot import abstraction as ab
++from bot.tree import BettingTree, get_tree
++
++FORMAT = 1
++DEFAULT_PATH = Path(__file__).resolve().parent.parent / "data" / "blueprint.npz"
++_DEFAULT_BUCKETS = object()        # sentinel: verify against data/buckets.npz
++_INT = ("format", "stack", "sb", "bb", "cap", "iterations", "seed", "n_dec", "n_term")
++_STR = ("tree_child_sha256", "buckets_sha256", "features_sha256")
++
++
++def tree_sha256(tree: BettingTree) -> str:
++    return hashlib.sha256(np.ascontiguousarray(tree.child).tobytes()).hexdigest()
++
++
++def _constants() -> dict:
++    return {"stack": game.STARTING_STACK, "sb": game.SMALL_BLIND, "bb": game.BIG_BLIND,
++            "cap": game.RAISE_CAP_PER_STREET}
++
++
++class Blueprint:
++    """A loaded blueprint. `meta` (read-only mapping) has stack, sb, bb, cap, buckets (counts
++    per street), iterations, and the identity fields listed in the module docstring."""
++
++    __slots__ = ("meta", "table", "offset", "_child")
++
++    def __init__(self, meta, table: np.ndarray, offset: np.ndarray, child: np.ndarray):
++        self.meta = MappingProxyType(dict(meta))
++        self.table, self.offset, self._child = table, offset, child
++        for a in (table, offset):
++            a.flags.writeable = False
++
++    # ---- loading
++
++    @classmethod
++    def load(cls, path, *, tree: BettingTree | None = None, buckets_path=_DEFAULT_BUCKETS) -> Blueprint:
++        """Load and verify. ValueError on a missing, corrupt or mismatching file.
++        buckets_path: the bucket table to check against (default data/buckets.npz;
++        None skips the table check, for synthetic test blueprints)."""
++        try:
++            return cls._load(path, tree, buckets_path)
++        except ValueError:
++            raise
++        except Exception as e:                      # OSError, BadZipFile, KeyError, EOFError, ...
++            raise ValueError(f"{path}: cannot read blueprint ({type(e).__name__}: {e})") from None
++
++    @classmethod
++    def try_load(cls, path=DEFAULT_PATH, **kw) -> Blueprint | None:
++        """load(), but None instead of any exception."""
++        try:
++            return cls.load(path, **kw)
++        except Exception:
++            return None
++
++    @classmethod
++    def _load(cls, path, tree, buckets_path) -> Blueprint:
++        with np.load(path, allow_pickle=False) as z:
++            meta = {k: int(z[k]) for k in _INT} | {k: str(z[k]) for k in _STR}
++            meta["linear"] = bool(z["linear"])
++            meta["buckets"] = tuple(int(x) for x in z["buckets"])
++            for k in z.files:
++                if k.startswith("dataset_"):
++                    meta[k] = z[k].item()
++            table = z["probs"]
++        if meta["format"] != FORMAT:
++            raise ValueError(f"{path}: blueprint format {meta['format']}, this code reads {FORMAT}")
++        tree = get_tree() if tree is None else tree
++        for k, want in (*_constants().items(), ("n_dec", tree.n_dec), ("n_term", tree.n_term),
++                        ("tree_child_sha256", tree_sha256(tree))):
++            if meta[k] != want:
++                raise ValueError(f"{path}: built for another tree or rules: {k} {meta[k]!r}, "
++                                 f"the runtime has {want!r}")
++        if buckets_path is not None:
++            p = ab.DEFAULT_PATH if buckets_path is _DEFAULT_BUCKETS else Path(buckets_path)
++            have = tuple(ab.NUM_BUCKETS[s] for s in game.Street) if p == ab.DEFAULT_PATH else None
++            sha = hashlib.sha256(Path(p).read_bytes()).hexdigest()
++            if meta["buckets_sha256"] != sha:
++                raise ValueError(f"{path}: built with another bucket table (sha256 "
++                                 f"{meta['buckets_sha256'][:12]}, {p} is {sha[:12]})")
++            if have is not None and meta["buckets"] != have:
++                raise ValueError(f"{path}: bucket counts {meta['buckets']}, the runtime has {have}")
++        counts = np.asarray(meta["buckets"], dtype=np.int64)
++        if counts.shape != (4,) or counts.min() < 1:
++            raise ValueError(f"{path}: bad bucket counts {meta['buckets']}")
++        offset = np.concatenate([[0], np.cumsum(counts[tree.street.astype(np.int64)])]).astype(np.int64)
++        if table.dtype != np.float16 or table.shape != (int(offset[-1]), 4):
++            raise ValueError(f"{path}: probs is {table.dtype} {table.shape}, "
++                             f"expected float16 {(int(offset[-1]), 4)}")
++        return cls(meta, table, offset, tree.child)
++
++    # ---- queries
++
++    def probs(self, node: int, bucket: int) -> np.ndarray:
++        """float64 [4] over game.Action: the blueprint's distribution at (decision node, the
++        actor's bucket on that street), summing to 1, exactly 0 on illegal actions.
++        IndexError on a node or bucket outside the tree."""
++        node, bucket = int(node), int(bucket)
++        lo = self.offset[node]
++        if node < 0 or bucket < 0 or lo + bucket >= self.offset[node + 1]:
++            raise IndexError(f"no infoset for node {node}, bucket {bucket}")
++        p = self.table[lo + bucket].astype(np.float64)
++        s = p.sum()
++        if s <= 0.0:                       # cannot happen in an exported file; stay legal anyway
++            p = (self._child[node] != -1).astype(np.float64)
++            s = p.sum()
++        return p / s
++
++    def act(self, node: int, bucket: int, legal, rng, purify: float = 0.1) -> game.Action:
++        """Sample a legal action. The distribution is masked to `legal` and renormalized;
++        probabilities below `purify` (I9) are zeroed and it is renormalized again. If nothing
++        is left, the most probable legal action. rng: anything with .random() (numpy
++        Generator, random.Random). Always returns a member of `legal`."""
++        legal = tuple(legal)
++        if not legal:
++            raise ValueError("no legal actions")
++        p = self.probs(node, bucket)
++        q = np.zeros(4)
++        idx = [int(a) for a in legal]
++        q[idx] = p[idx]
++        best = max(legal, key=lambda a: q[int(a)])          # most probable legal (first on ties)
++        total = q.sum()
++        if total <= 0.0:
++            return best
++        q /= total
++        if purify > 0.0:
++            q[q < purify] = 0.0
++            total = q.sum()
++            if total <= 0.0:
++                return best
++            q /= total
++        u = rng.random()
++        acc = 0.0
++        pick = None
++        for a in legal:
++            w = q[int(a)]
++            if w > 0.0:
++                acc += w
++                pick = a
++                if u < acc:
++                    return a
++        return pick if pick is not None else best        # u rounded past the last cumulative
++
++
++def load_default(path=DEFAULT_PATH, **kw) -> Blueprint | None:
++    """The shipped blueprint, or None if it is missing, corrupt or stale. Never raises."""
++    return Blueprint.try_load(path, **kw)
+diff --git a/bot/timing.py b/bot/timing.py
+new file mode 100644
+index 0000000..b4c37e8
+--- /dev/null
++++ b/bot/timing.py
+@@ -0,0 +1,129 @@
++"""Time manager: count charged thinking time and size Monte Carlo per decision.
++
++The judge charges every HTTP request max(0, elapsed - 1 ms) against an 8 s bank per
++1,000-hand half. An empty bank means check/fold for the rest of the half. A request
++delivers any finished hands (on_hand_end, once per hand) and then asks for one action.
++The bot cannot see request boundaries, so it counts this way:
++
++- begin()/end() wrap choose_action and charge max(0, dt - grace_s). The default grace_s
++  (0.75 ms) leaves 0.25 ms of the free 1 ms for server and HTTP plumbing, measured at
++  ~0.23 ms per request on the dev laptop. Plumbing is CPU-bound too: on a machine f
++  times slower, pass grace_s=grace_for_cpu_factor(f), or the count falls below the
++  judge's once plumbing passes 0.25 ms per request.
++- add(dt) charges on_hand_end work in full, with no grace.
++
++iters() returns a rollout count from LADDER:
++- Base level: 32 if pot <= 8, 64 if pot <= 30, else 128.
++- Pace: projected = used / (hand_index + 1) * hands. Above target_s, drop one level per
++  started 20% of overshoot. Below 0.5 * target_s, raise one level. target_s defaults to
++  0.375 * bank_s (3.0 s of the default 8 s bank).
++- Hard rule: used > 6.0 s (with the default 8 s bank) returns 0.
++
++The constructor never raises, because a raise inside new_half forfeits the half. An
++unusable bank means no Monte Carlo at all; other unusable arguments get their defaults.
++"""
++
++from __future__ import annotations
++
++import math
++import time
++from typing import TYPE_CHECKING, Callable
++
++if TYPE_CHECKING:
++    from game import Street
++
++LADDER = (0, 16, 32, 64, 128, 256)
++GRACE_S = 0.00075         # default free time per choose_action call (dev-laptop plumbing)
++HARD_STOP_S = 6.0         # no Monte Carlo past this much use of a DEFAULT_BANK_S bank
++DEFAULT_BANK_S = 8.0      # a retuned bank scales the hard stop in proportion
++TARGET_FRACTION = 0.375   # default target_s as a share of the bank: 3.0 s of 8 s
++DEFAULT_HANDS = 1000
++SMALL_POT = 8             # base level 32 at or below this pot
++MEDIUM_POT = 30           # 64 at or below this pot, 128 above it
++OVERSHOOT_STEP = 0.2      # one level down per started 20% of projected overshoot
++_EPS = 1e-9               # keeps exact 20% boundaries from rounding up a level
++
++
++def _real(x: object) -> float | None:
++    """x as a float, or None when it is not a number or is NaN."""
++    try:
++        v = float(x)
++    except (TypeError, ValueError, OverflowError):
++        return None
++    return v if v == v else None
++
++
++def grace_for_cpu_factor(f: float) -> float:
++    """grace_s for a CPU f times slower than the dev laptop.
++
++    The judge's free 1 ms minus plumbing of 0.25 ms * f. Below zero once plumbing alone
++    passes 1 ms (f > 4); end() then charges that overrun too. A non-number or f <= 0
++    means "not measured" and gives the default GRACE_S.
++    """
++    v = _real(f)
++    if v is None or not 0 < v < math.inf:
++        return GRACE_S
++    return 0.001 - 0.00025 * v
++
++
++class TimeManager:
++    """Per-half bank accounting and a pot-weighted rollout budget. Lives in `memory`."""
++
++    __slots__ = ("bank_s", "hands", "target_s", "clock", "grace_s", "stop_s", "used", "_t0")
++
++    def __init__(self, bank_s: float = 8.0, hands: int = 1000, target_s: float | None = None,
++                 clock: Callable[[], float] = time.perf_counter,
++                 grace_s: float = GRACE_S) -> None:
++        bank, n, target, grace = _real(bank_s), _real(hands), _real(target_s), _real(grace_s)
++        if bank is None or not bank > 0:
++            bank, self.stop_s = 0.0, -1.0          # unusable bank: never any Monte Carlo
++        else:
++            self.stop_s = HARD_STOP_S * bank / DEFAULT_BANK_S
++        if target is None or not 0 < target < math.inf:
++            target = TARGET_FRACTION * (bank or DEFAULT_BANK_S)
++        self.bank_s = bank
++        self.hands = n if n is not None and 0 < n < math.inf else DEFAULT_HANDS
++        self.target_s = target
++        self.grace_s = grace if grace is not None and math.isfinite(grace) else GRACE_S
++        self.clock = clock
++        self.used = 0.0     # charged s; >= the judge's count while plumbing <= 1 ms - grace_s
++        self._t0: float | None = None
++
++    def begin(self) -> None:
++        """Start timing one choose_action call."""
++        self._t0 = self.clock()
++
++    def end(self) -> None:
++        """Charge the time since begin() beyond grace_s. Without a begin(), do nothing."""
++        t0 = self._t0
++        if t0 is None:
++            return
++        self._t0 = None
++        dt = self.clock() - t0 - self.grace_s
++        if dt > 0.0:
++            self.used += dt
++
++    def add(self, dt: float) -> None:
++        """Charge dt seconds in full (on_hand_end work gets no grace)."""
++        if dt > 0.0:
++            self.used += dt
++
++    def iters(self, pot: int, street: Street, hand_index: int) -> int:
++        """Rollouts this decision may spend. `street` is reserved; the rule ignores it."""
++        used = self.used
++        if used > self.stop_s:
++            return 0
++        level = 2 if pot <= SMALL_POT else 3 if pot <= MEDIUM_POT else 4
++        target = self.target_s
++        projected = used * self.hands / (hand_index + 1 if hand_index > 0 else 1)
++        if projected > target:
++            # Started 20% steps of overshoot. Capped at 5, which reaches 0 from any base
++            # level and keeps an infinite overshoot out of math.ceil.
++            over = min((projected / target - 1.0) / OVERSHOOT_STEP, 5.0)
++            drop = math.ceil(over - _EPS)
++            level -= drop if drop > 1 else 1
++            if level <= 0:
++                return 0
++        elif projected < 0.5 * target:
++            level += 1
++        return LADDER[level]
+diff --git a/bot/tree.py b/bot/tree.py
+new file mode 100644
+index 0000000..7c86168
+--- /dev/null
++++ b/bot/tree.py
+@@ -0,0 +1,214 @@
++"""Exact betting tree: every betting sequence the rules allow, enumerated with game.Game.
++
++Betting never depends on the cards, so one exhaustive DFS of game.Game (its default
++constants, any deal) reaches every decision node (F1: 15,952 = preflop 62, flop 810,
++turn 3,678, river 11,402) and every terminal (25,538). The CFR trainer indexes its
++tables by decision node. At runtime the bot maps an observation's action history to
++its node with node_of().
++
++Ids: decision nodes are numbered in DFS pre-order from the root (0), children in Action
++order, so every build gives the same ids. Terminals are numbered in the order the DFS
++reaches them.
++
++Arrays are relative to the button, not to a seat:
++- actor_is_button[node]: True when the button acts at the node.
++- street_contrib[node]: (button, bb) chips put in on the node's street so far.
++- term_contrib[tid]: (button, bb) chips put in over the whole hand.
++- term_fold_by_button[tid]: 1 = the button folded, 0 = the BB folded, -1 = showdown
++  (all-in run-outs included).
++- child[node, action]: -1 = illegal, >= 0 = decision id, <= -2 = terminal -2 - code.
++
++get_tree() builds once per process and caches. Every array is non-writeable, `legal`
++is a tuple and `key_to_node` a read-only mapping, so the cache is read-only data
++(ruling R22). build_tree() has no side effects.
++"""
++
++from __future__ import annotations
++
++import functools
++from collections.abc import Mapping
++from dataclasses import dataclass, fields
++from types import MappingProxyType
++
++import numpy as np
++
++from game import Action, Deal, Game, Observation
++
++# Any deal works: cards only decide who wins a showdown, never what can be bet.
++_DEAL = Deal(hole_cards=((0, 1, 2, 3, 4), (5, 6, 7, 8, 9)), board=(10, 11, 12, 13, 14))
++_INT16_MAX = int(np.iinfo(np.int16).max)
++
++
++@dataclass(frozen=True, eq=False)
++class BettingTree:
++    """Decision nodes and terminals of the betting game (conventions: module docstring)."""
++
++    n_dec: int
++    n_term: int
++    starting_stack: int                      # each seat's stack before the blinds
++    street: np.ndarray                       # int8 [n_dec]
++    actor_is_button: np.ndarray              # bool [n_dec]
++    legal: tuple[tuple[Action, ...], ...]    # [n_dec], in Game.legal_actions() order
++    child: np.ndarray                        # int32 [n_dec, 4]
++    pot_at: np.ndarray                       # int16 [n_dec]: pot at the node
++    to_call_at: np.ndarray                   # int16 [n_dec]: what the actor must add to call
++    street_contrib: np.ndarray               # int16 [n_dec, 2]: (button, bb) street bets
++    term_fold_by_button: np.ndarray          # int8 [n_term]
++    term_contrib: np.ndarray                 # int16 [n_term, 2]: (button, bb) hand totals
++    key_to_node: Mapping[tuple[int, ...], int]   # action codes from the root -> node
++
++    def __post_init__(self) -> None:
++        for f in fields(self):
++            value = getattr(self, f.name)
++            if isinstance(value, np.ndarray):
++                value.flags.writeable = False
++        if not isinstance(self.key_to_node, MappingProxyType):
++            object.__setattr__(self, "key_to_node", MappingProxyType(dict(self.key_to_node)))
++
++    def __reduce__(self):
++        """Pickle (and copy) through plain fields: a mappingproxy cannot be pickled."""
++        state = {f.name: getattr(self, f.name) for f in fields(self)}
++        state["key_to_node"] = dict(self.key_to_node)
++        return _from_fields, (state,)
++
++
++def _from_fields(state: dict) -> BettingTree:
++    return BettingTree(**state)
++
++
++def _chips(values: list) -> np.ndarray:
++    """Chip amounts as int16. Raises ValueError rather than wrap a value that won't fit."""
++    arr = np.array(values, dtype=np.int64)
++    if arr.size and not (0 <= arr.min() and arr.max() <= _INT16_MAX):
++        raise ValueError(f"chip amounts {arr.min()}..{arr.max()} do not fit int16")
++    return arr.astype(np.int16)
++
++
++def build_tree() -> BettingTree:
++    """Enumerate every betting sequence by DFS over game.Game. Returns a new tree."""
++    street: list[int] = []
++    actor_is_button: list[bool] = []
++    legal: list[tuple[Action, ...]] = []
++    child: list[list[int]] = []
++    pot: list[int] = []
++    to_call: list[int] = []
++    bets: list[tuple[int, int]] = []
++    fold_by_button: list[int] = []
++    contrib: list[tuple[int, int]] = []
++    key_to_node: dict[tuple[int, ...], int] = {}
++    shared: dict[tuple[Action, ...], tuple[Action, ...]] = {}   # one object per legal set
++
++    root = Game(_DEAL, button_seat=0)
++    btn = root.button_seat
++    # Iterative pre-order DFS (no recursive closure, so no reference cycle keeps these
++    # lists alive after the build). Entry: (game, key, parent's child row, action into
++    # that row); the root's row is a throwaway.
++    stack: list = [(root, (), [0], 0)]
++    while stack:
++        g, key, parent_row, via = stack.pop()
++        node = parent_row[via] = len(street)
++        key_to_node[key] = node
++        seat, acts = g.to_act, g.legal_actions()
++        street.append(int(g.street))
++        actor_is_button.append(seat == btn)
++        legal.append(shared.setdefault(acts, acts))
++        pot.append(g.pot)
++        to_call.append(g._to_call(seat))       # the engine's own rule, not a copy of it
++        bets.append((g.bets[btn], g.bets[1 - btn]))
++        row = [-1, -1, -1, -1]
++        child.append(row)
++        later = []
++        for a in acts:
++            nxt = g.clone()
++            nxt.apply(a)
++            if nxt.is_terminal:
++                res = nxt.result()
++                row[a] = -2 - len(fold_by_button)
++                # A fold's winner is the seat that did not fold.
++                fold_by_button.append(-1 if res.went_to_showdown else int(res.winner_seat != btn))
++                contrib.append((nxt.contributed[btn], nxt.contributed[1 - btn]))
++            else:
++                later.append((nxt, key + (int(a),), row, a))
++        stack.extend(reversed(later))          # lowest action on top: ids in Action order
++
++    return BettingTree(
++        n_dec=len(street),
++        n_term=len(fold_by_button),
++        starting_stack=root.stacks[btn] + root.contributed[btn],
++        street=np.array(street, dtype=np.int8),
++        actor_is_button=np.array(actor_is_button, dtype=bool),
++        legal=tuple(legal),
++        child=np.array(child, dtype=np.int32),
++        pot_at=_chips(pot),
++        to_call_at=_chips(to_call),
++        street_contrib=_chips(bets),
++        term_fold_by_button=np.array(fold_by_button, dtype=np.int8),
++        term_contrib=_chips(contrib),
++        key_to_node=MappingProxyType(key_to_node),    # sole reference: no copy needed
++    )
++
++
++@functools.cache
++def get_tree() -> BettingTree:
++    """The process-wide tree, built on first call (call it in warmup, not mid-hand).
++
++    A failed build raises and is not cached, so the next call would build again: the
++    caller should call this once and keep the result.
++    """
++    return build_tree()
++
++
++def _codes(values, numpy_ints: bool = False) -> tuple[int, ...] | None:
++    """Action codes as plain ints, or None if any value is not an int.
++
++    An Action from any copy of game.py and a plain int code both count. A bool, float,
++    str or numpy integer does not, even though int() would turn it into a code. With
++    numpy_ints, a numpy integer counts too (a numpy bool is not a numpy integer).
++    """
++    codes = []
++    for x in values:
++        if x.__class__ is bool or not (isinstance(x, int) or numpy_ints and isinstance(x, np.integer)):
++            return None
++        codes.append(int(x))
++    return tuple(codes)
++
++
++def node_from_actions(actions: tuple[int, ...], tree: BettingTree) -> int | None:
++    """Decision node reached by these action codes from the root (() is the root).
++
++    The codes may be ints, Actions or numpy integers (trainer input, e.g. a row of a numpy
++    array), never bools. None for a sequence outside the tree (illegal, or ending in a
++    terminal) or malformed input. Never raises.
++    """
++    try:
++        key = _codes(actions, numpy_ints=True)
++        return None if key is None else tree.key_to_node.get(key)
++    except Exception:
++        return None
++
++
++def node_of(obs: Observation, tree: BettingTree) -> int | None:
++    """Decision node of the actor's observation: an O(1) lookup of its action history.
++
++    Returns the node only if the observation also shows that node's state: street,
++    actor seat, legal actions (same order), pot, amount to call, and the tree's chips in
++    play (both stacks plus the pot). Otherwise None: the history is outside the tree or
++    malformed, or the observation is corrupt or comes from other rules. A retuned stack
++    misses at every node. A retuned blind or raise cap misses wherever it changes the
++    pot, the amount to call or the legal actions, so callers must still compare their
++    config (Review Focus 1). On None the caller falls back to the heuristic. Never raises.
++    """
++    try:
++        key = _codes([a.action for a in obs.action_history])
++        node = None if key is None else tree.key_to_node.get(key)
++        if node is not None and (
++                obs.legal_actions == tree.legal[node]
++                and obs.pot == tree.pot_at[node]
++                and obs.to_call == tree.to_call_at[node]
++                and obs.is_button == tree.actor_is_button[node]
++                and obs.street == tree.street[node]
++                and obs.my_stack + obs.opp_stack + obs.pot == 2 * tree.starting_stack):
++            return node
++    except Exception:
++        pass
++    return None
+diff --git a/requirements.txt b/requirements.txt
+index afa4b65..523c299 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,2 +1,3 @@
+ fastapi==0.156.1
+ uvicorn==0.54.0
++numpy

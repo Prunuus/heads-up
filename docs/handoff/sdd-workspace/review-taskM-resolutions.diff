@@ -1,0 +1,83 @@
+== remerge-diff 274e269 (kevin-opp)
+274e269 Merge kevin-opp into kevin.
+
+diff --git a/bot/policy.py b/bot/policy.py
+remerge CONFLICT (content): Merge conflict in bot/policy.py
+index e188812..be87481 100644
+--- a/bot/policy.py
++++ b/bot/policy.py
+@@ -37,19 +37,11 @@ charge, as with the real judge. In-process sims read online factors of about 1-2
+ times s (see PREFLOP_REF_S), so the bot over-counts there: the safe direction.
+ 
+ State (R22). Module state is what warmup() loads: written once, read-only afterwards.
+-<<<<<<< 9fbaf8b (Add the v1 tuning, confirmation and gate results.)
+-Per-half state lives in memory (tm, time_scale, rng, opp, config_ok, cpu, faults). A
+-PolicyBot holds only its settings. Never pickle bot.* objects during play:
+-sim.match.load_bot_file runs each half on a private copy of the bot package, and pickle
+-looks classes up in the caller's copy. For the same reason every import here sits at
+-module top.
+-=======
+-Per-half state lives in memory (tm, rng, opp, config_ok, cpu, faults, exploits: the
+-exploit layer's bot.exploit.STAT_KEYS counters). A PolicyBot holds
+-only its settings. Never pickle bot.* objects during play: sim.match.load_bot_file runs
+-each half on a private copy of the bot package, and pickle looks classes up in the
+-caller's copy. For the same reason every import here sits at module top.
+->>>>>>> a9ffa6b (Add the exploit layer on top of the heuristic and feed the opponent model from PolicyBot for v2.)
++Per-half state lives in memory (tm, time_scale, rng, opp, config_ok, cpu, faults,
++exploits: the exploit layer's bot.exploit.STAT_KEYS counters). A PolicyBot holds only
++its settings. Never pickle bot.* objects during play: sim.match.load_bot_file runs each
++half on a private copy of the bot package, and pickle looks classes up in the caller's
++copy. For the same reason every import here sits at module top.
+ """
+ 
+ from __future__ import annotations
+@@ -424,16 +416,12 @@ class PolicyBot:
+         """Feed the result to the opponent model and charge the time in full with add(dt)
+         (R9). Never raises: each raise would count as its own error."""
+         try:
+-<<<<<<< 9fbaf8b (Add the v1 tuning, confirmation and gate results.)
+-=======
+-            t0 = _clock()
+-            opp = _opponent(memory)
+-            if opp is not None:
+-                opp.finish(result)          # never raises
+->>>>>>> a9ffa6b (Add the exploit layer on top of the heuristic and feed the opponent model from PolicyBot for v2.)
+             tm = _time_manager(memory)
+             clock = tm.clock if tm is not None else _clock
+             t0 = clock()
++            opp = _opponent(memory)
++            if opp is not None:
++                opp.finish(result)          # never raises
+             if tm is not None:
+                 tm.add(clock() - t0)
+         except Exception:
+== remerge-diff 601ad98 (kevin-field)
+601ad98 Merge kevin-field into kevin.
+
+diff --git a/tests/test_tournament.py b/tests/test_tournament.py
+remerge CONFLICT (content): Merge conflict in tests/test_tournament.py
+index 9476527..98906ca 100644
+--- a/tests/test_tournament.py
++++ b/tests/test_tournament.py
+@@ -135,8 +135,7 @@ def test_resolve_bot():
+     assert callable(resolve_bot("baseline-bots/baseline_random.py"))
+     with pytest.raises(ValueError):
+         resolve_bot("nonexistent_thing")
+-<<<<<<< 274e269 (Merge kevin-opp into kevin.)
+-    assert HOLDOUT | TRAIN == set(ZOO)
++    assert HOLDOUT | TRAIN | FIELD == set(ZOO)
+ 
+ 
+ _SCALES_SEEN = []
+@@ -165,6 +164,3 @@ def test_time_scale_reaches_every_match():
+     _SCALES_SEEN.clear()
+     focus_eval(_ScaleRecorder, {"cs": ZOO["calling_station"]}, ["t1"], 5, workers=1)
+     assert _SCALES_SEEN == [1.0, 1.0]           # the default is this machine's speed
+-=======
+-    assert HOLDOUT | TRAIN | FIELD == set(ZOO)
+->>>>>>> d78414a (Correct the FIELD results with a serial rerun at low machine load.)
+== 2115725 docs
+2115725 Add the merged-head gate and real-judge results to the v2 results.
+
+ docs/results/v2.md | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)

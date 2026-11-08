@@ -1,0 +1,3 @@
+# Offline training/tuning only; not used at runtime (the container uses requirements.txt).
+-r requirements.txt
+numba
