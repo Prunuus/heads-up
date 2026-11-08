@@ -20,17 +20,25 @@ Scripts in `train/` run offline only; the tournament container never imports the
 
 ### The committed table
 
-    python -m train.fit_buckets --per-street 200000 --iters 2000 --workers 4 --seed 0 --out data/buckets.npz
+400 buckets a street (ruling R38): preflop 400, flop and turn 20 x 20, river 395 equity buckets + 5 nut buckets.
 
-Measured on the dev laptop (Apple Silicon, 4 performance cores, numpy 2.5):
+    python -m train.fit_buckets --per-street 1000000 --preflop 400 --flop-grid 20x20 --turn-grid 20x20 \
+        --river 400 --workers 8 --seed 0 --out data/buckets.npz
+
+Measured on the PC (Ryzen 7 9700X, WSL2, numpy 2.5.4), as `taskset -c 8-15 nice -n 19`, sharing CPUs 8-15 with a dataset generation for most of the run:
 
 | step | spots | wall |
 |---|---|---|
-| features | 600,000 (200k per postflop street) | 32.6 s, 18,400 spots/s on 4 workers, about 4,600 per core |
-| validation at 2,000 rollouts | 6,000 | 8.3 s |
-| total | | 41.6 s, file 0.46 MB |
+| features | 3,000,000 (1M per postflop street) | 364.3 s, 8,235 spots/s on 8 workers |
+| validation at 2,000 rollouts | 6,000 | 9.3 s |
+| total | | 379.6 s, file 0.46 MB |
 
-Validation rms against 2,000-rollout Monte Carlo was 0.009–0.012 per street, the Monte Carlo noise floor (sd ≤ 0.011), with mean bias ≤ 0.0011.
+- The fit kept `--seed 0` and the default design sizes, so the designs, the features sha256 and the validation errors are those of the previous table: deal datasets re-bucket, with no regeneration.
+- Validation rms against 2,000-rollout Monte Carlo was 0.009–0.012 per street, the Monte Carlo noise floor (sd ≤ 0.011), with mean bias ≤ 0.0011.
+- 1M spots give each flop and turn cell and each river equity bucket about 2,500 fit samples.
+- Occupancy (x the uniform share), on all 376,992 holes preflop and on the 10M deal dataset's 20M spots a street postflop: preflop 0.55–1.41, flop 0.87–1.12, turn 0.12–1.93, river equity buckets 0.20–2.18. The river's nut buckets hold 0.55–1.84% of hands each.
+- Below 0.4x are four buckets next to runs of tied feature values: turn cell 398 (0.12x) and river buckets 392, 367 and 365 (0.20, 0.30, 0.37x). `fit_edges` never splits a run, and at 400 buckets some runs outweigh a bucket: in the turn's top strength row, 9.6% of the hands have equity exactly 1.0 (1.9 cells' worth), and some river equity values hold 1.3–2.3 buckets' worth. At 100 buckets these runs were under half a bucket. The occupancy tests record the four as known failures (`FLOOR_FAILS` in `tests/test_abstraction.py`).
+- The previous table, the plan's 200/100/100/100, was `--per-street 200000 --iters 2000 --workers 4 --seed 0`: 41.6 s on the dev laptop (Apple Silicon, 4 performance cores), 0.46 MB.
 
 ### On a big machine
 
@@ -55,7 +63,10 @@ The bucket counts live in the file, and `bot.abstraction.NUM_BUCKETS` reads them
 ### After any refit
 
     python -m pytest -q tests/test_abstraction.py               # ranges, occupancy, agreement, timing
-    python -m pytest -q -m slow tests/test_abstraction.py       # occupancy on 20k fresh spots per street
+    python -m pytest -q -m slow tests/test_abstraction.py       # occupancy on 200 fresh spots per postflop bucket
+
+- The occupancy tests size their fresh sample to the table's counts (per bucket: 60 postflop spots by default or 200 slow, 500 preflop hands or 1,000 slow), so the [0.4x, 2.5x] rule means the same at any count.
+- The river's 5 nut buckets hold the nuts by category, a mass the game sets: about 0.6% (straight flush) to 2% (quads) of river hands each, whatever the count. At 400 river buckets that is 2-8x a uniform bucket, so instead of the [0.4x, 2.5x] rule each must hold 0.4-2.5% of river hands, the band the rule gave them at the plan's 100.
 
 Commit the new `data/buckets.npz` along with whatever was rebuilt on it.
 
@@ -122,6 +133,11 @@ Measured on the PC (Ryzen 7 9700X, WSL2), pinned to logical CPUs 8-15 (4 physica
   - re-bucketing to a 400/200/200/200 refit took 2.2 s, and back 5.0 s: 1-2.5 s per million deals, bound by disk writes;
   - the round trip gave back bit-identical buckets;
   - 500 random deals matched the refit's `bucket()` on their cards.
+- Re-bucket a copy (`cp -r`, not hard links) when the original must stay on its table. Measured on the 10M dataset's copy `train_data/d10m-b400`, for the committed 400-a-street table:
+  - `--verify 100` (20,000 deals recomputed from their cards) took 47.8 s, `taskset -c 8-15 nice -n 19`;
+  - 3,000 more random deals matched `bucket()` on their cards;
+  - `load_deals` takes the new table and refuses the old one;
+  - every bucket holds at least 3,000 deals per seat (the thin turn cell), and the average is 25,000.
 
 ### Checks
 
@@ -148,20 +164,18 @@ The trainer solves the abstract game of the deal dataset: chance draws a row uni
 
 ### The long run
 
-    mkdir -p train_data/mccfr
-    nohup python -m train.mccfr --deals train_data/d10m --iterations 24_000_000_000 \
-        --out train_data/mccfr/blueprint_raw.npz --seed 0 --threads 16 --count-visits \
-        --max-hours 6 > train_data/mccfr/train.log 2>&1 &
+    mkdir -p train_data/mccfr-b400
+    nohup taskset -c 8-15 python -m train.mccfr --deals train_data/d10m-b400 --iterations 24_000_000_000 \
+        --out train_data/mccfr-b400/blueprint_raw.npz --seed 0 --threads 8 --count-visits \
+        --max-hours 6 > train_data/mccfr-b400/train.log 2>&1 &
 
-The plan's floor of 200M iterations takes about 5 minutes at the measured rates. A 6-hour run is 10-30 billion iterations, so give it `--max-hours 6` and an iteration target it will not reach before that. Spend the surplus on finer buckets (sizing below). For finer buckets:
-- refit the table first (the "More buckets" section above);
-- re-bucket the dataset, which takes seconds per million deals;
-- then train:
+The plan's floor of 200M iterations takes about 5 minutes at the measured rates. A 6-hour run is 10-30 billion iterations, so give it `--max-hours 6` and an iteration target it will not reach before that. The surplus goes to finer buckets: the committed table has 400 a street (sizing below).
+- The dataset must be bucketed with the committed table. `train_data/d10m-b400` is a copy of the 10M dataset re-bucketed to it (the "After a refit" section above):
 
-      python -m train.fit_buckets --per-street 1000000 --preflop 400 --flop-grid 20x20 \
-          --turn-grid 20x20 --river 400 --workers 8 --seed 0 --out data/buckets.npz
-      python -m train.gen_deals --rebucket --out train_data/d10m
+      cp -r train_data/d10m train_data/d10m-b400
+      python -m train.gen_deals --rebucket --out train_data/d10m-b400 --verify 100
 
+- A 2-minute smoke run of this command (6,380,800 infosets; 8 threads on CPUs 8-15, normal priority, load average 6-11) made 72.3M iterations in 120 s of training, 600k it/s, in line with the 200/100/100/100 table (643k it/s over its 300M-iteration verification run below). Peak RSS was 1.5 GB. Checkpoints are 255 MB and took 0.3-1.6 s to write; each diagnostic took 1.3-2.5 s. Traverser visits were 31.9 per iteration.
 - Detached with `nohup ... &`, the run survives the terminal. `tmux new -s mccfr` then the same command without `nohup`/`&` works too (detach with Ctrl-b d, reattach with `tmux attach -t mccfr`).
 - `--threads` defaults to the CPUs the process may use, so `taskset -c 8-15` gives 8 threads. Use 16 only when nothing timing-sensitive shares the PC.
 - `--max-hours` caps the training time of the run, summed over resumes. When it runs out, the trainer writes a checkpoint and the final output at the iterations done.
@@ -169,8 +183,8 @@ The plan's floor of 200M iterations takes about 5 minutes at the measured rates.
 
 Monitor:
 
-    tail -f train_data/mccfr/train.log                  # a progress line a minute, checkpoint lines every 10%
-    ls -la train_data/mccfr/                            # checkpoints so far
+    tail -f train_data/mccfr-b400/train.log             # a progress line a minute, checkpoint lines every 10%
+    ls -la train_data/mccfr-b400/                       # checkpoints so far
     ps -o pid,etime,pcpu,args -C python | grep train.mccfr
 
 A progress line gives the iterations done, the rate over the last minute and since the start, the elapsed training time and the ETA. A checkpoint line follows its diagnostic.
@@ -179,7 +193,7 @@ Stop and resume:
 
     pkill -TERM -f train.mccfr      # or Ctrl-C in tmux: checkpoints the current block, then exits (143, 130)
 
-- To resume, rerun the identical command. It continues from the newest of the checkpoints and `--out`, so it continues the iteration count. The per-iteration rng streams and the linear weights then continue exactly: with one thread, an interrupted-and-resumed run is bit-identical to an uninterrupted one (`tests/test_mccfr.py`).
+- To resume, rerun the identical command; `--threads` may differ (for example 16 without `taskset` once nothing timing-sensitive shares the PC), it is not part of the run's identity. It continues from the newest of the checkpoints and `--out`, so it continues the iteration count. The per-iteration rng streams and the linear weights then continue exactly: with one thread, an interrupted-and-resumed run is bit-identical to an uninterrupted one (`tests/test_mccfr.py`).
 - A larger `--iterations` extends a finished run.
 - A different seed, linear flag, `--count-visits` or dataset (rows, seed, table, features) is refused: use another `--out`.
 
