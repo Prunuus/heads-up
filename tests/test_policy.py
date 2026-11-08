@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 import game
 from bot import policy
 from bot.heuristic import HeuristicParams
+from bot.opponent import OpponentModel
 from bot.timing import TimeManager, grace_for_cpu_factor
 from game import Action, AgentConfig, Game, Street, make_deal
 from sim.match import REPO_ROOT, load_bot_file, play_half
@@ -212,6 +213,36 @@ def test_exploit_and_blueprint_faults_keep_the_heuristic(monkeypatch):
     assert f["blueprint"] == f["exploit"] == len(obs_all) and f["heuristic"] == 0
 
 
+def test_a_legal_exploit_change_replaces_the_base(monkeypatch):
+    # T11 M3, the positive path: a legal answer from the exploit layer is played. An
+    # illegal one is a fault, and the base it was given stands.
+    bot, memory = _fresh_bot()
+    seen = []
+
+    def change(base, obs, feats, memory):
+        other = [a for a in obs.legal_actions if a != base]
+        seen.append((base, other[-1] if other else base))
+        return seen[-1][1]
+
+    monkeypatch.setattr(bot, "_exploit_action", change)
+    obs_all = _observations("pos", 20)
+    for obs in obs_all:
+        assert bot.choose_action(obs, memory) == seen[-1][1]
+    assert sum(b != a for b, a in seen) > len(obs_all) // 2
+    assert memory["faults"]["exploit"] == 0
+
+    bases = []
+
+    def illegal(base, obs, feats, memory):
+        bases.append(base)
+        return Action.FOLD if obs.to_call == 0 else 99     # FOLD when free; not an Action
+
+    monkeypatch.setattr(bot, "_exploit_action", illegal)
+    for obs in obs_all:
+        assert bot.choose_action(obs, memory) == bases[-1]
+    assert memory["faults"]["exploit"] == len(obs_all)
+
+
 def test_corrupt_observation_falls_through():
     bot, memory = _fresh_bot()
     obs = next(o for o in _observations("bad", 10) if o.street == Street.FLOP)
@@ -242,7 +273,7 @@ def test_hand_finished_never_raises_and_charges_time():
     for r in (g.hand_result(0), g.hand_result(1), None, {"junk": 1}, 42):
         assert bot.on_hand_end(r, memory) is None
         assert policy.hand_finished(r, memory) is None
-    assert tm.used >= before                        # add(dt), no grace
+    assert tm.used > before                         # add(dt), no grace
     for broken in ({}, {"tm": "not a time manager"}, None):
         assert bot.on_hand_end(g.hand_result(0), broken) is None
         assert policy.hand_finished(g.hand_result(0), broken) is None
@@ -263,7 +294,7 @@ def test_start_half_sets_the_planned_memory():
     tm = memory["tm"]
     assert isinstance(tm, TimeManager) and tm.bank_s == 4.0 and tm.hands == 500
     assert tm.grace_s == pytest.approx(grace_for_cpu_factor(bot.cpu_factor))
-    assert memory["opp"] is None                    # Task 13 fills this slot
+    assert isinstance(memory["opp"], OpponentModel)
     assert memory["config_ok"] is True              # num_hands / bank do not change the game
     a, b = {}, {}
     bot.new_half(AgentConfig(), a)

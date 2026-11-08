@@ -1,14 +1,17 @@
-"""Layered policy: CFR blueprint -> exploit modifiers -> heuristic -> guaranteed-legal default.
+"""Layered policy: base = CFR blueprint else heuristic; exploits then modify the base.
 
 PolicyBot.choose_action (the module-level decide) runs, per decision:
+0. Opponent model: memory["opp"].observe(obs) first (bot/opponent.py, Task 13);
+   on_hand_end feeds it every finished hand with finish(result).
 1. Blueprint: only if a blueprint is loaded and memory["config_ok"], meaning this half's
    game (stack, blinds, raise cap) is the one it was trained for. The slot stays empty
    until Task 20.
 2. Heuristic: compute_features + heuristic_action, whenever the blueprint gives no answer.
    It reads every size from obs, so it also plays a retuned game.
-3. Exploits: modify the base action from step 1 or 2. Identity until Task 14.
-So the order of precedence is blueprint -> exploits -> heuristic; the exploit layer runs
-last because it needs a base action to modify. Each layer has its own try/except and catches any Exception (a corrupt observation, a
+3. Exploits: bot.exploit.apply_exploits modifies the base action from step 1 or 2,
+   from the opponent model's evidence (Task 14).
+So base = blueprint else heuristic, and exploits then modify the base. Each layer has
+its own try/except and catches any Exception (a corrupt observation, a
 missing table, a bug). A layer must answer with a legal Action. Otherwise it counts a
 fault in memory["faults"] and the decision moves on: a failed base layer leaves the next
 base layer to answer, and a failed exploit keeps the base action. If no layer answers
@@ -23,7 +26,8 @@ each preflop heuristic decision is a fixed workload too, and the median of the l
 is compared with its dev-PC median. The larger of the two factors sizes the grace.
 
 State (R22). Module state is what warmup() loads: written once, read-only afterwards.
-Per-half state lives in memory (tm, rng, opp, config_ok, cpu, faults). A PolicyBot holds
+Per-half state lives in memory (tm, rng, opp, config_ok, cpu, faults, exploits: the
+exploit layer's bot.exploit.STAT_KEYS counters). A PolicyBot holds
 only its settings. Never pickle bot.* objects during play: sim.match.load_bot_file runs
 each half on a private copy of the bot package, and pickle looks classes up in the
 caller's copy. For the same reason every import here sits at module top.
@@ -41,9 +45,11 @@ from types import MappingProxyType
 import numpy as np
 
 import evaluator
-from bot import equity, preflop
+from bot import equity, exploit, preflop
+from bot.exploit import apply_exploits
 from bot.features import compute_features
 from bot.heuristic import HeuristicParams, heuristic_action
+from bot.opponent import OpponentModel
 from bot.timing import TimeManager, grace_for_cpu_factor
 from game import (BIG_BLIND, NUM_DEALS, RAISE_CAP_PER_STREET, SMALL_BLIND, STARTING_STACK,
                   TIME_BANK_SECONDS, Action, Game, Observation, Street, make_deal)
@@ -137,6 +143,14 @@ def _time_manager(memory) -> TimeManager | None:
     except Exception:
         return None
     return tm if isinstance(tm, TimeManager) else None
+
+
+def _opponent(memory) -> OpponentModel | None:
+    try:
+        opp = memory["opp"]
+    except Exception:
+        return None
+    return opp if isinstance(opp, OpponentModel) else None
 
 
 def _clamp_factor(f: float) -> float:
@@ -328,6 +342,10 @@ class PolicyBot:
         except Exception:
             bank, hands = TIME_BANK_SECONDS, NUM_DEALS
         try:
+            cap, bb = config.raise_cap, config.big_blind
+        except Exception:
+            cap, bb = RAISE_CAP_PER_STREET, BIG_BLIND
+        try:
             meta = DEFAULT_META if self.blueprint is None else self.blueprint.meta
         except Exception:
             meta = None
@@ -335,10 +353,11 @@ class PolicyBot:
             memory["tm"] = TimeManager(bank_s=bank, hands=hands,
                                        grace_s=grace_for_cpu_factor(self.cpu_factor))
             memory["rng"] = np.random.default_rng(RNG_SEED)
-            memory["opp"] = None           # Task 13's OpponentModel (merged before Task 14)
+            memory["opp"] = OpponentModel(raise_cap=cap, big_blind=bb)   # bad values: defaults
             memory["config_ok"] = config_matches(config, meta)
             memory["cpu"] = CpuFactorEstimator()
             memory["faults"] = dict.fromkeys(FAULT_KINDS, 0)
+            memory["exploits"] = dict.fromkeys(exploit.STAT_KEYS, 0)
         except Exception:
             pass
 
@@ -354,10 +373,13 @@ class PolicyBot:
                 tm.end()
 
     def on_hand_end(self, result, memory: dict) -> None:
-        """Charge the time in full with add(dt) (R9). Task 14 feeds the result to
-        memory["opp"] here. Never raises: each raise would count as its own error."""
+        """Feed the result to the opponent model and charge the time in full with add(dt)
+        (R9). Never raises: each raise would count as its own error."""
         try:
             t0 = _clock()
+            opp = _opponent(memory)
+            if opp is not None:
+                opp.finish(result)          # never raises
             tm = _time_manager(memory)
             if tm is not None:
                 tm.add(_clock() - t0)
@@ -367,6 +389,12 @@ class PolicyBot:
     # ------------------------------------------------------------------- the layers
 
     def _decide(self, obs, memory, tm) -> Action:
+        try:
+            opp = _opponent(memory)
+            if opp is not None:
+                opp.observe(obs)            # first: the layers read the updated model
+        except Exception:                   # observe() never raises; belt and braces
+            pass
         base = feats = None
         try:
             config_ok = memory["config_ok"] is True
@@ -420,10 +448,11 @@ class PolicyBot:
         return feats, action
 
     def _exploit_action(self, base, obs, feats, memory):
-        """Exploit layer slot. Task 14 fills it: bot.exploit.apply_exploits(base, obs, feats,
-        memory["opp"], memory["rng"]). The identity until then. feats is None when the base
-        came from the blueprint."""
-        return base
+        """Exploit layer: bot.exploit.apply_exploits on the base, with this bot's heuristic
+        params and the half's counters. feats is None when the base came from the
+        blueprint."""
+        return apply_exploits(base, obs, feats, _opponent(memory), memory["rng"], self.params,
+                              memory.get("exploits"))
 
     def _observe_cpu(self, memory, tm, dt: float) -> None:
         """Add an online sample and resize the grace: the larger of the warmup and online
