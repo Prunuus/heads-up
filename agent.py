@@ -50,7 +50,8 @@ AGENT_NAME = "ShortDeckHybrid"
 
 # ===== YOUR CODE HERE =====
 
-# The layered policy: blueprint -> exploits -> heuristic -> a guaranteed-legal default.
+# The layered policy: base = blueprint else heuristic; exploits then modify the base;
+# a guaranteed-legal default backs every layer.
 # BOT holds settings only; all per-half state lives in `memory` (see bot/policy.py).
 BOT = policy.PolicyBot()
 
