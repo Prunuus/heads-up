@@ -1,6 +1,9 @@
 """FIELD split: the agentic competitor bots, copied unmodified (sim/opponents/field/README.md)."""
+import contextlib
 import hashlib
+import os
 import re
+import sys
 
 import pytest
 
@@ -28,6 +31,41 @@ def loaded():
             cache[name] = ZOO[name]()
         return cache[name]
     return get
+
+
+@contextlib.contextmanager
+def swallowed_exceptions():
+    """Yields the list of exceptions caught by an except block in a FIELD bot's own code.
+
+    All three bots catch every exception in choose_action and on_hand_end and play
+    check/call-or-fold instead, so a harness incompatibility would still show 0 errors."""
+    mon = sys.monitoring
+    tool = next(i for i in range(6) if mon.get_tool(i) is None)
+    bot_files = str(FIELD_DIR) + os.sep
+    caught = []
+
+    def handled(code, offset, exc):
+        if code.co_filename.startswith(bot_files):
+            caught.append(f"{code.co_name}: {exc!r}")
+
+    mon.use_tool_id(tool, "tests.test_field")
+    try:
+        mon.register_callback(tool, mon.events.EXCEPTION_HANDLED, handled)
+        mon.set_events(tool, mon.events.EXCEPTION_HANDLED)
+        yield caught
+    finally:
+        mon.set_events(tool, 0)
+        mon.register_callback(tool, mon.events.EXCEPTION_HANDLED, None)
+        mon.free_tool_id(tool)
+
+
+def _assert_played_its_strategy(h, swallowed):
+    """No error, no forfeit, no swallowed exception, and at least one raise. Every fallback
+    (the bots' catch-alls, our harness's error and bank-out default) only checks, calls or
+    folds, so a raise shows the bot's own strategy at work."""
+    assert h.errors_a == 0 and not h.forfeit_a
+    assert swallowed == []
+    assert h.actions_a.get("RAISE_HALF", 0) + h.actions_a.get("RAISE_POT", 0) > 0
 
 
 def test_field_names():
@@ -89,12 +127,14 @@ def test_field_bot_loads_its_data_file(loaded, name, attr):
 @pytest.mark.parametrize("name", sorted(FIELD))
 def test_field_bot_plays_a_short_half_errorless(loaded, name):
     bot = loaded(name)
-    h = play_half(lambda: bot, ZOO["calling_station"], "f1", 1, deals=SMOKE_DEALS)
-    assert h.errors_a == 0 and not h.forfeit_a
+    with swallowed_exceptions() as swallowed:
+        h = play_half(lambda: bot, ZOO["calling_station"], "f1", 1, deals=SMOKE_DEALS)
+    _assert_played_its_strategy(h, swallowed)
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize("name", sorted(FIELD))
 def test_field_bot_plays_200_deals_errorless(name):
-    h = play_half(ZOO[name], ZOO["calling_station"], "f200", 1, deals=200)
-    assert h.errors_a == 0 and not h.forfeit_a
+    with swallowed_exceptions() as swallowed:
+        h = play_half(ZOO[name], ZOO["calling_station"], "f200", 1, deals=200)
+    _assert_played_its_strategy(h, swallowed)
