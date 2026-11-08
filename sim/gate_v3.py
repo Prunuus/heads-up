@@ -15,7 +15,7 @@ Sections (--sections, default abcde; c needs no runs of its own):
      --cpus while nothing else runs there; the opponents' max bank per half is reported.
      Also the paired v3 - v2 difference on the same matches.
   c  errors, forfeits and our max bank per half over every match of a and b.
-  d  LBR(v3) vs LBR(v2): --lbr-particles (2000, T21 M5), --lbr-seeds (8) x --lbr-deals
+  d  LBR(v3) vs LBR(v2): --lbr-particles (2000, T21 M5), --lbr-seeds (16) x --lbr-deals
      (250) per half, --lbr-workers (LBR has no clock: use the free cores). A ModelCheckError
      marks the value unreliable (reported, never used silently). LBR values are lower bounds.
   e  purify sweep {0, 0.05, 0.1, 0.2} (--purify): paired v3(purify) - v2 on TRAIN,
@@ -374,7 +374,7 @@ def main(argv=None) -> int:
     ap.add_argument("--h2h-seeds", type=int, default=5)
     ap.add_argument("--focus-seeds", type=int, default=3)
     ap.add_argument("--scales", type=float, nargs="+", default=[1.0, 2.5])
-    ap.add_argument("--lbr-seeds", type=int, default=8)
+    ap.add_argument("--lbr-seeds", type=int, default=16)
     ap.add_argument("--lbr-deals", type=int, default=250)
     ap.add_argument("--lbr-particles", type=int, default=2000)
     ap.add_argument("--lbr-workers", type=int, default=8)
