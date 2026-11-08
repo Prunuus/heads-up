@@ -128,3 +128,71 @@ Measured on the PC (Ryzen 7 9700X, WSL2), pinned to logical CPUs 8-15 (4 physica
     python -m pytest -q tests/test_gen_deals.py      # format, engine agreement, determinism, resume, loader, rebucket
 
 The suite takes a few seconds and needs no `-m slow`. It generates small datasets in temp directories. Among other checks, it confirms that every bucket equals `bot.abstraction.bucket()` on the stored cards, that every showdown equals `omaha_score`, and that 40 showdowns equal a check-down played through `game.Game`.
+
+## Blueprint training: `train/mccfr.py` (external-sampling MCCFR)
+
+The trainer solves the abstract game of the deal dataset: chance draws a row uniformly, then both players bet on the exact tree (`bot/tree.py`), each seeing only its own bucket on the current street. The module docstring has the algorithm, the array layout, the thread semantics and the checkpoint format.
+
+- Iteration t samples a row and the traverser `t % 2`, then makes one external-sampling walk. Regret matching uses positive regrets, and linear weighting (Linear CFR) weighs iteration t by t + 1 in both the regrets and the average.
+- The arrays are `regret` and `avg`, float32 `[n_info, 4]`. Node n owns rows `offset[n] .. offset[n+1]-1`, one per bucket of its street. The counts come from the dataset (`NUM_BUCKETS` of `data/buckets.npz`): 1,601,400 infosets at 200/100/100/100. Each infoset costs 32 bytes, plus 8 with `--count-visits`.
+- Threads share the arrays without locks (hogwild). Each thread alternates the traverser; threads that each served one player oscillated instead of converging (module docstring). With `--threads 1` a run is deterministic.
+- Outputs, all atomic and all the same format:
+  - a checkpoint `<out stem>.ckpt-<iterations>.npz` every 10%, on SIGINT/SIGTERM, and when `--max-hours` runs out;
+  - the final state in `--out`.
+  - Each one carries the tree hash, the bucket-table and features hashes, the counts, the game constants, the iterations, seed, linear flag and the dataset identity. `load_checkpoint` refuses a mismatch with the current tree or table (Task 19 exports from it).
+- At each checkpoint it logs a diagnostic: the self-play value, both best responses, and the exploitability (bb/hand) of the average strategy.
+  - It is exact on a perfect-recall dataset used whole (the tests).
+  - On the real dataset it is approximate: a greedy best response on `--eval-rows` (default 8,192) fixed sampled rows. Under imperfect recall it is not the exact best response, and with few rows per infoset it mostly exploits the sample's noise.
+  - Measured on the 2M dataset from 30M to 300M iterations: 3.3-3.5 bb/hand on 8,192 rows, 0.84-0.90 on 65,536 and 0.29 on 262,144 (76 s), flat throughout.
+  - Treat it as a sanity monitor: it, and the self-play value, should stay finite and steady. It is not a convergence measure; the Task 21 LBR probe measures the blueprint.
+
+### The long run
+
+    mkdir -p train_data/mccfr
+    nohup python -m train.mccfr --deals train_data/d10m --iterations 200_000_000 \
+        --out train_data/mccfr/blueprint_raw.npz --seed 0 --threads 16 --count-visits \
+        --max-hours 6 > train_data/mccfr/train.log 2>&1 &
+
+- Detached with `nohup ... &`, the run survives the terminal. `tmux new -s mccfr` then the same command without `nohup`/`&` works too (detach with Ctrl-b d, reattach with `tmux attach -t mccfr`).
+- `--threads` defaults to the CPUs the process may use, so `taskset -c 8-15` gives 8 threads. Use 16 only when nothing timing-sensitive shares the PC.
+- `--max-hours` caps the training time of the run, summed over resumes. When it runs out, the trainer writes a checkpoint and the final output at the iterations done.
+- `--count-visits` stores traverser visits per infoset in every checkpoint, so Task 19 and the sizing below can see which infosets are under-trained.
+
+Monitor:
+
+    tail -f train_data/mccfr/train.log                  # a progress line a minute, checkpoint lines every 10%
+    ls -la train_data/mccfr/                            # checkpoints so far
+    ps -o pid,etime,pcpu,args -C python | grep train.mccfr
+
+A progress line gives the iterations done, the rate over the last minute and since the start, the elapsed training time and the ETA. A checkpoint line follows its diagnostic.
+
+Stop and resume:
+
+    pkill -TERM -f train.mccfr      # or Ctrl-C in tmux: checkpoints the current block, then exits (143, 130)
+
+- To resume, rerun the identical command. It continues from the newest of the checkpoints and `--out`, so it continues the iteration count. The per-iteration rng streams and the linear weights then continue exactly: with one thread, an interrupted-and-resumed run is bit-identical to an uninterrupted one (`tests/test_mccfr.py`).
+- A larger `--iterations` extends a finished run.
+- A different seed, linear flag, `--count-visits` or dataset (rows, seed, table, features) is refused: use another `--out`.
+
+### Throughput (PC: Ryzen 7 9700X, WSL2; 2M dataset, 200/100/100/100 buckets)
+
+The kernel is memory-latency-bound: random reads and writes into 49 MB of arrays plus the dataset. Its rate depends on how loaded the PC's shared L3 and memory are, as well as on the thread count. Two sessions, minutes apart:
+
+| threads | CPUs | light load (load avg 12-15) | heavy load (load avg 18-22), from one common 18.7M-iteration state |
+|---|---|---|---|
+| 1 | 8-15 | 104k it/s | 71k it/s |
+| 4 | 8-15 | 553k it/s | 200k it/s |
+| 8 | 8-15 | 1.61M it/s | 351k it/s (397k with `--count-visits`) |
+| 16 | all | 1.10M it/s (CPUs 0-7 busy with Track A) | 742k it/s |
+
+- The same code in pure Python (`NUMBA_DISABLE_JIT=1`) runs 649 it/s. Numba is required: the plan's rule is numba below 20k it/s.
+- `--count-visits` costs nothing measurable.
+- The rate also drifts as training proceeds, because the walk's length depends on the strategies. The verification run below gives the rate over a long horizon.
+- Numba compiles the kernels on first use (about 2 s) and caches them in `train/__pycache__`.
+
+### Checks
+
+    python -m pytest -q tests/test_mccfr.py             # engine payoffs, exact best response, convergence, checkpoints
+    python -m pytest -q -m slow tests/test_mccfr.py     # 8-thread convergence, the plan's behaviour tests, SIGTERM + resume
+
+The default tests take about 10 s. The key one trains on a perfect-recall game: three hand classes, the same bucket on every street. On that game the best response is exact, and the test asserts that the exploitability falls at every checkpoint, on one thread and on two. It falls about as 1/sqrt(T): 0.194 bb/hand at 200k iterations, 0.032 at 2M, 0.010 at 20M.
