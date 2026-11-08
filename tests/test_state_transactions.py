@@ -150,3 +150,97 @@ def test_completed_hand_observations_cannot_be_counted_again():
     with pytest.raises(ValueError):
         ingest(observation, memory)
     assert memory == before
+
+
+@pytest.mark.parametrize("button_acts", [False, True])
+@pytest.mark.parametrize("executed", [Action.CHECK_CALL, Action.RAISE_HALF, Action.RAISE_POT])
+def test_terminal_river_response_requires_the_proposed_wager(button_acts, executed):
+    game = flop()
+    while game.street < Street.RIVER:
+        game.apply(Action.CHECK_CALL)
+    if button_acts:
+        game.apply(Action.CHECK_CALL)
+    seat = game.to_act
+    observation = game.observation(seat)
+    memory = fresh()
+    ingest(observation, memory)
+    remember_raise(observation, Action.RAISE_POT, memory)
+    # A timeout may replace our proposed bet with a check. A changed/retried
+    # decision may also execute a smaller wager. Neither confirms this proposal.
+    game.apply(executed)
+    while not game.is_terminal:
+        game.apply(Action.CHECK_CALL)
+    finish(game.hand_result(seat), memory)
+    assert memory["completed"] == 1
+    assert memory["resolved_post"] == int(executed == Action.RAISE_POT)
+    assert memory["post_folds"] == 0
+    assert memory["pending"] is None
+    assert memory["internal_errors"] == 0
+
+
+def test_proposed_all_in_replaced_by_a_call_is_not_a_raise_response():
+    game = flop()
+    while not game.is_terminal:
+        observation = game.observation(game.to_act)
+        if (Action.RAISE_POT in observation.legal_actions
+                and observation.raise_to[Action.RAISE_POT] - observation.my_bet
+                == observation.my_stack):
+            seat = game.to_act
+            memory = fresh()
+            ingest(observation, memory)
+            remember_raise(observation, Action.RAISE_POT, memory)
+            game.apply(Action.CHECK_CALL)
+            while not game.is_terminal:
+                game.apply(Action.CHECK_CALL)
+            finish(game.hand_result(seat), memory)
+            assert memory["completed"] == 1
+            assert memory["resolved_pre"] + memory["resolved_post"] == 0
+            assert memory["pending"] is None
+            assert memory["internal_errors"] == 0
+            return
+        game.apply(Action.RAISE_POT if Action.RAISE_POT in observation.legal_actions
+                   else Action.CHECK_CALL)
+    pytest.fail("fixture did not reach an offered all-in raise")
+
+
+@pytest.mark.parametrize("change", [
+    {"pot": 3, "my_net": 1},
+    {"my_net": 1},
+])
+def test_terminal_payout_cannot_erase_observed_contributions(change):
+    game = flop()
+    seat = game.to_act
+    memory = fresh()
+    ingest(game.observation(seat), memory)
+    game.apply(Action.RAISE_POT)
+    game.apply(Action.FOLD)
+    result = game.hand_result(seat)
+    # Both players already invested two chips on the observed flop. These
+    # otherwise plausible payouts reduce the opponent's investment to one.
+    before = deepcopy(memory)
+    finish(replace(result, **change), memory)
+    assert memory["completed"] == 0
+    assert memory["processed"] == before["processed"]
+    assert memory["fingerprints"] == before["fingerprints"]
+    finish(result, memory)
+    assert memory["completed"] == 1
+    assert memory["internal_errors"] == 1
+
+
+def test_showdown_pot_cannot_shrink_below_the_observed_pot():
+    # Increase the visible investment using a real raise and call, then
+    # submit an otherwise consistent payout with a smaller final pot.
+    game = flop()
+    game.apply(Action.RAISE_POT)
+    game.apply(Action.CHECK_CALL)
+    seat = game.to_act
+    memory = fresh()
+    ingest(game.observation(seat), memory)
+    while not game.is_terminal:
+        game.apply(Action.CHECK_CALL)
+    result = game.hand_result(seat)
+    bad = replace(result, pot=4, my_net={"me": 2, "opp": -2, "split": 0}[result.winner])
+    finish(bad, memory)
+    assert memory["completed"] == 0
+    finish(result, memory)
+    assert memory["completed"] == 1

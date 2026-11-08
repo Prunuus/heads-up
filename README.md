@@ -4,9 +4,11 @@ Deterministic heads-up short-deck PLO5 bot for the TAMU Datathon challenge.
 Repository work is on **`licheng`**. Participant: `3XKO`; bot: `3XKO`.
 Use your registered team name when submitting.
 
-The current engineering review fixes transactional opponent tracking, raise and
-result validation, evaluator input handling, and the HTTP validation tools. Read
-[the current audit](reports/audit/REVIEW.md) for defects, verification, and limits.
+The current engineering review fixes terminal response attribution, observed-chip
+consistency, and validation server/source selection. Read
+[the current review](reports/audit-followup/REVIEW.md) for defects, verification,
+and limits. The [earlier audit](reports/audit/REVIEW.md) covers the preceding
+transaction, raise, evaluator-input, and HTTP validation fixes.
 The strategy remains `v05_limp20`, based on the supplied
 [v0.4 design](design/DESIGN.md). The [v0.5 strategy report](reports/v05/RELEASE.md)
 and [v0.4 report](reports/RELEASE.md) describe historical source revisions;
@@ -115,7 +117,8 @@ image with `research/` mounted read-only and output under `/tmp`. E0 uses
 
 The [historical v0.5 requirements matrix](reports/v05/REQUIREMENTS.md) maps that
 revision to evidence; [v0.4 acceptance evidence](reports/REQUIREMENTS.md) remains
-archived. Current engineering verification is in [the audit](reports/audit/REVIEW.md).
+archived. Current engineering verification is in
+[the latest review](reports/audit-followup/REVIEW.md).
 Raw CSVs, JSON registries, and JUnit output are in `reports/`.
 Thresholds remain provisional hypotheses. The v0.5 comparisons and rejected
 variants are archived under `reports/v05/`; original final seeds were not reused.

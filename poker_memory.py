@@ -21,7 +21,7 @@ def initialize(config, memory, mode=FULL, adaptation=True, pure_bluffs=True, dia
     memory.update(config=AgentConfig(), mode=FULL, adaptation=adaptation,
                   pure_bluffs=pure_bluffs, hand=-1, cursor=0, prefix=(),
                   first_seen=False, pre_raise_seen=False, aggressor=False, hole=None,
-                  street=None, board=(), is_button=None,
+                  street=None, board=(), is_button=None, contributions=None,
                   pending=None, cache={}, cache_hits=0, cache_misses=0,
                   diagnostics_enabled=diagnostics, diagnostics=[], internal_errors=0,
                   processed=bytearray(1000), fingerprints=[None] * 1000,
@@ -128,7 +128,9 @@ def ingest(obs, memory):
         elif a.action != Action.FOLD:
             state["post_nonfold"] += 1
             state["post_raises"] += a.action in (Action.RAISE_HALF, Action.RAISE_POT)
-    state.update(cursor=len(h), prefix=tuple(h), street=obs.street, board=tuple(obs.board))
+    stack = state["config"].starting_stack
+    state.update(cursor=len(h), prefix=tuple(h), street=obs.street, board=tuple(obs.board),
+                 contributions=(stack - obs.my_stack, stack - obs.opp_stack))
     memory.update(state)
 
 
@@ -141,6 +143,8 @@ def remember_raise(obs, action, memory):
     candidate = dict(hand=obs.hand_index, street=obs.street, index=len(obs.action_history),
                      cost=obs.raise_to[action] - obs.my_bet,
                      total=obs.raise_to[action], pot=obs.pot + obs.raise_to[action] - obs.my_bet,
+                     called_pot=obs.pot + obs.raise_to[action] - obs.my_bet
+                                + min(obs.raise_to[action] - obs.opp_bet, obs.opp_stack),
                      board=tuple(obs.board),
                      ends_betting=(obs.raise_to[action] - obs.my_bet == obs.my_stack
                                    or obs.raise_to[action] - obs.opp_bet >= obs.opp_stack
@@ -184,6 +188,15 @@ def finish(result, memory):
         elif opp or result.winner == "split":
             raise ValueError("inconsistent fold result")
         if i == memory['hand'] and memory['hole'] is not None:
+            if result.went_to_showdown:
+                final_contributions = (result.pot // 2,) * 2
+            elif result.winner == "me":
+                final_contributions = (result.pot - result.my_net, result.my_net)
+            else:
+                final_contributions = (-result.my_net, result.pot + result.my_net)
+            if any(final < observed for final, observed
+                   in zip(final_contributions, memory["contributions"])):
+                raise ValueError("terminal payout contradicts observed contributions")
             if set(memory['hole']) & set(b + opp):
                 raise ValueError("terminal cards overlap hero")
             for key in memory['cache']:
@@ -210,7 +223,10 @@ def finish(result, memory):
             if (not result.went_to_showdown and result.winner == "me"
                     and b == pending["board"] and result.pot == pending["pot"]):
                 delta.update(_response_delta(pending["street"], True))
-            elif result.went_to_showdown and pending["ends_betting"]:
+            elif (result.went_to_showdown and pending["ends_betting"]
+                  and result.pot == pending["called_pot"]):
+                # A proposed raise may have been replaced by the referee's
+                # default. Only a matching final pot supports an immediate call.
                 delta.update(_response_delta(pending["street"], False))
         # All scratch validation/calculations complete. No user code in commit phase.
         updates = {key: memory[key] + n for key, n in delta.items()}

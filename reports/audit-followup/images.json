@@ -1,0 +1,19 @@
+[
+  {
+    "tag": "poker-agent-base:local",
+    "id": "sha256:c41cc5c6639f0ee82c8fab9b414a3bcaacdbc1566fadec5500b6a9e55a1dc331",
+    "size_bytes": 329247718
+  },
+  {
+    "tag": "poker-agent-check:latest",
+    "id": "sha256:a6ac69e2f6d311e598dd490344444d24c8ad45f280974018ff48c8b00d498324",
+    "size_bytes": 329302514,
+    "added_bytes": 54796
+  },
+  {
+    "tag": "poker-agent-tests:followup",
+    "id": "sha256:aec42dd637790cf6433ff9161a9099389be51ded37e9106a71e04b5b41ba335f",
+    "size_bytes": 334060572,
+    "purpose": "Separate verification image with pytest and httpx; not the submission image"
+  }
+]

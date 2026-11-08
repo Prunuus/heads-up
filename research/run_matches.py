@@ -5,12 +5,14 @@ The call_heavy/max_raise stress aliases are behaviorally identical to the
 official station/pot baselines respectively, without relying on hand sampling.
 """
 import argparse
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
 import os
 from pathlib import Path
 import platform
+import socket
 import statistics
 import subprocess
 import sys
@@ -53,7 +55,15 @@ def run_half(mode, opponent, seed, half, out, adaptation, bluffs, deals, strateg
     alias = {'call_heavy': 'baseline_calling_station', 'max_raise': 'baseline_always_pot'}
     script = ROOT / 'baseline-bots' / (alias.get(opponent, opponent) + '.py')
     name = f'{mode}_{opponent}_{seed}_{half}'
-    env = dict(os.environ, PORT='5008', PB_MODE=mode, PB_ADAPTATION=str(int(adaptation)),
+    # Leave users' normal bot ports alone and keep concurrent validation runs
+    # separate. Bind both ephemeral ports together so they cannot be identical.
+    with ExitStack() as sockets:
+        ports = []
+        for _ in range(2):
+            listener = sockets.enter_context(socket.socket())
+            listener.bind(('127.0.0.1', 0))
+            ports.append(listener.getsockname()[1])
+    env = dict(os.environ, PORT=str(ports[0]), PB_MODE=mode, PB_ADAPTATION=str(int(adaptation)),
                PB_PURE_BLUFFS=str(int(bluffs)), PB_STRATEGY=strategy,
                PB_MEMORY_OUTPUT=str(out / (name + '_memory.json')))
     logfile = (out / (name + '.log')).open('w')
@@ -62,12 +72,14 @@ def run_half(mode, opponent, seed, half, out, adaptation, bluffs, deals, strateg
     handles = []
     try:
         processes.append(subprocess.Popen([sys.executable, str(Path(__file__).with_name('serve_candidate.py'))], env=env, cwd=ROOT, stdout=logfile, stderr=logfile))
-        processes.append(subprocess.Popen([sys.executable, str(script)], env=dict(os.environ, PORT='5009'), cwd=ROOT, stdout=logfile, stderr=logfile))
+        processes.append(subprocess.Popen([sys.executable, str(script)], env=dict(os.environ, PORT=str(ports[1])), cwd=ROOT, stdout=logfile, stderr=logfile))
         token = os.environ.get('AGENT_TOKEN') or None
-        handles = [MeasuredHandle('http://127.0.0.1:5008', AgentConfig(num_hands=deals), token),
-                   MeasuredHandle('http://127.0.0.1:5009', AgentConfig(num_hands=deals), token)]
+        handles = [MeasuredHandle(f'http://127.0.0.1:{port}', AgentConfig(num_hands=deals), token)
+                   for port in ports]
         if not all(h.wait_healthy(12.) for h in handles):
             raise RuntimeError('startup health failed')
+        if any(p.poll() is not None for p in processes):
+            raise RuntimeError('bot process exited during startup; refusing an unrelated server')
         startup = time.perf_counter() - start
         result = play_half(*handles, seed, half, deals, keep_logs=keep_logs)
         raw = result.to_dict()
