@@ -1,7 +1,7 @@
 """External-sampling MCCFR for the CFR blueprint (Task 18).
 
-    python -m train.mccfr --deals train_data/d10m --iterations 200_000_000 \\
-        --out train_data/mccfr/blueprint_raw.npz --seed 0 --threads 16
+    python -m train.mccfr --deals train_data/d10m --iterations 24_000_000_000 --max-hours 6 \\
+        --out train_data/mccfr/blueprint_raw.npz --seed 0 --threads 16 --count-visits
 
 The game: chance picks one row of the Task 17 deal dataset uniformly, then both players bet
 on the exact betting tree (bot/tree.py), each knowing only its own bucket on the current
@@ -12,12 +12,23 @@ Seats. The dataset's seat 0 is the button (showdown +1 = the button wins) and th
 arrays are relative to the button, so player 0 = the button everywhere. terminal_value()
 reads a terminal as the engine pays it (tests/test_mccfr.py checks it against game.Game).
 
-Layout (R26). regret and avg are float32 [n_info, 4] (action order of game.Action). Decision
-node n owns rows offset[n] .. offset[n + 1] - 1, one per bucket of its street, so the
-infoset of (n, b) is row offset[n] + b. The per-street counts are the dataset's num_buckets
-(the table's, bot.abstraction.NUM_BUCKETS for data/buckets.npz): no row is unused, and the
-per-street arrays [nodes of a street, B_street, 4] are slices of this one. Illegal actions
-are never written: their regret and avg stay exactly 0.
+Layout (R26; the contract with Task 19). regret is float32 [n_info, 4], avg is float64
+[n_info, 4], columns in game.Action order.
+- Rows are node-major in decision-node id order: node n owns rows offset[n] .. offset[n + 1]
+  - 1, one per bucket of its street, so the infoset of (n, b) is row offset[n] + b.
+- Node ids are DFS pre-order, so the streets interleave: a preflop node's flop, turn and
+  river descendants come before the next preflop node (3,182 street changes along the ids).
+  A street's array [nodes of the street, B_street, 4] is therefore a gather, never a slice:
+  array[street_rows(tree, offset, street)].reshape(-1, B_street, 4).
+- The per-street counts B are the dataset's num_buckets (the table's,
+  bot.abstraction.NUM_BUCKETS for data/buckets.npz), so no row is unused.
+- Illegal actions are never written: their regret and avg stay exactly 0.
+- avg is float64 because an increment is about 2/k of its row's sum after k updates with
+  linear weights. Around k = 1e7, which the hottest preflop rows reach in a run of billions
+  of iterations, that is about one float32 ulp: increments get rounded to whole ulps or
+  dropped. The result is a systematic bias of up to several percentage points in the
+  average strategy (the Task 18 review simulated 2.2 pp at 1.5e7 updates and 7.9 pp at 6e7).
+  Regret increments stay about 1/sqrt(k) of their row, so float32 is enough there.
 
 Algorithm (Lanctot et al. 2009, external sampling). Iteration t (0-based) samples a row
 and the traverser t % 2 (0 = button) from its own rng stream, then walks the tree once:
@@ -32,7 +43,8 @@ average increments weigh iteration t by t + 1), else 1. The blueprint is the ave
 strategy avg normalized over the legal actions (average_strategy()).
 
 Threads (R23). One parallel numba kernel runs blocks of iterations on `threads` worker
-threads (prange), thread k taking iterations t0 + k, t0 + k + threads, ... of the block.
+threads (prange). Thread k takes the iteration pairs (t0 + 2p, t0 + 2p + 1) for p = k,
+k + threads, ..., so every thread alternates the traverser (_run_block says why that matters).
 They share regret and avg without locks (hogwild, as parallel MCCFR usually does):
 - a lost update (two threads read-modify-write the same float at once) drops one sampled
   increment. Each iteration touches a few hundred of the millions of rows, so collisions
@@ -44,8 +56,9 @@ With threads=1 a run is deterministic: the rng is keyed by (seed, iteration) and
 weight is the iteration number. That is what makes resume exact (below).
 
 Checkpoints and resume (R23). The state is (regret, avg, iterations done), plus the
-diagnostic history and optional visit counts. It is written atomically every 10% of the
-iterations (<out stem>.ckpt-<iterations>.npz), on SIGINT/SIGTERM, and when --max-hours of
+diagnostic history and optional visit counts. It is written atomically (format FORMAT = 2:
+float64 avg; a format-1 file, float32 avg from before that change, is refused) every 10% of
+the iterations (<out stem>.ckpt-<iterations>.npz), on SIGINT/SIGTERM, and when --max-hours of
 training time runs out; the final state goes to `out`. A rerun with the same arguments
 resumes from the latest of those files (refusing one from another run: tree, table, dataset,
 seed, linear). It continues the iteration count, so the rng streams and the linear weights
@@ -94,7 +107,7 @@ from bot.tree import BettingTree, get_tree
 from game import Street
 from train import gen_deals as gd
 
-FORMAT = 1
+FORMAT = 2                        # 2: avg float64 (1: float32, refused)
 CHECKPOINTS = 10                  # one every 10% of the iterations
 EVAL_ROWS = 8192                  # rows the checkpoint diagnostic samples from a large dataset
 EVAL_STREAM = 18                  # rng (seed, EVAL_STREAM) picks those rows
@@ -121,6 +134,19 @@ def infoset_offsets(tree: BettingTree, num_buckets) -> np.ndarray:
     if nb.shape != (4,) or nb.min() < 1:
         raise ValueError(f"bad bucket counts {tuple(num_buckets)}")
     return np.concatenate([[0], np.cumsum(nb[tree.street.astype(np.int64)])]).astype(np.int64)
+
+
+def street_rows(tree: BettingTree, offset: np.ndarray, street) -> np.ndarray:
+    """int64 rows of one street's infosets, by node (ascending id) then bucket, so that
+    array[street_rows(tree, offset, s)].reshape(-1, B_s, 4) is street s's per-street array.
+    A gather, because the streets' rows interleave (module docstring, Layout)."""
+    nodes = np.flatnonzero(tree.street == int(street))
+    if not len(nodes):
+        return np.zeros(0, dtype=np.int64)
+    width = np.diff(offset)[nodes]
+    if (width != width[0]).any():
+        raise ValueError("offset gives one street's nodes different bucket counts")
+    return (offset[nodes][:, None] + np.arange(width[0])).reshape(-1).astype(np.int64)
 
 
 def tree_sha256(tree: BettingTree) -> str:
@@ -486,7 +512,7 @@ def _diagnostic_rows(buckets, showdown, eval_rows: int, seed: int):
 
 class Checkpoint(NamedTuple):
     regret: np.ndarray      # float32 [n_info, 4]
-    avg: np.ndarray         # float32 [n_info, 4]
+    avg: np.ndarray         # float64 [n_info, 4]
     offset: np.ndarray      # int64 [n_dec + 1]
     visits: np.ndarray      # int64 [n_info] traverser visits (empty unless counted)
     diag: np.ndarray        # float64 [k, len(DIAG_COLUMNS)]: the checkpoint diagnostics so far
@@ -535,8 +561,13 @@ def save_checkpoint(path, ck: Checkpoint) -> None:
 def _read(path) -> Checkpoint:
     with np.load(path) as z:
         try:
-            if int(z["format"]) != FORMAT:
-                raise ValueError(f"{path}: checkpoint format {int(z['format'])}, this code reads {FORMAT}")
+            fmt = int(z["format"])
+            if fmt == 1:
+                raise ValueError(f"{path}: checkpoint format 1 keeps avg in float32, which biases the "
+                                 "average strategy of heavily visited infosets; this code reads format "
+                                 f"{FORMAT} (float64 avg). Retrain: format-1 runs cannot be resumed")
+            if fmt != FORMAT:
+                raise ValueError(f"{path}: checkpoint format {fmt}, this code reads {FORMAT}")
             meta = {k: int(z[k]) for k in _META_INT} | {k: str(z[k]) for k in _META_STR} | {
                 k: bool(z[k]) for k in _META_BOOL} | {k: tuple(int(x) for x in z[k]) for k in _META_TUPLE}
             meta["train_seconds"] = float(z["train_seconds"])
@@ -568,10 +599,10 @@ def load_checkpoint(path, tree: BettingTree | None = None, buckets_table=ab.DEFA
     if not np.array_equal(ck.offset, offset):
         raise ValueError(f"{path}: its offset table does not match num_buckets {m['num_buckets']}")
     n_info = int(offset[-1])
-    for name in ("regret", "avg"):
+    for name, dtype in (("regret", np.float32), ("avg", np.float64)):
         a = getattr(ck, name)
-        if a.shape != (n_info, 4) or a.dtype != np.float32:
-            raise ValueError(f"{path}: {name} is {a.dtype} {a.shape}, expected float32 {(n_info, 4)}")
+        if a.shape != (n_info, 4) or a.dtype != dtype:
+            raise ValueError(f"{path}: {name} is {a.dtype} {a.shape}, expected {np.dtype(dtype)} {(n_info, 4)}")
     if ck.visits.shape != ((n_info,) if m["count_visits"] else (0,)):
         raise ValueError(f"{path}: visits has shape {ck.visits.shape}")
     return ck
@@ -673,7 +704,7 @@ def train(tree: BettingTree, deals_path, iterations: int, out: str, seed: int, l
 
     latest = _latest(out)
     if latest is None:
-        ck = Checkpoint(np.zeros((n_info, 4), np.float32), np.zeros((n_info, 4), np.float32), offset,
+        ck = Checkpoint(np.zeros((n_info, 4), np.float32), np.zeros((n_info, 4), np.float64), offset,
                         np.zeros(n_info if count_visits else 0, np.int64),
                         np.zeros((0, len(DIAG_COLUMNS))), run_meta | {"iterations": 0, "train_seconds": 0.0})
     else:

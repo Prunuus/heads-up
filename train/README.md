@@ -134,7 +134,14 @@ The suite takes a few seconds and needs no `-m slow`. It generates small dataset
 The trainer solves the abstract game of the deal dataset: chance draws a row uniformly, then both players bet on the exact tree (`bot/tree.py`), each seeing only its own bucket on the current street. The module docstring has the algorithm, the array layout, the thread semantics and the checkpoint format.
 
 - Iteration t samples a row and the traverser `t % 2`, then makes one external-sampling walk. Regret matching uses positive regrets, and linear weighting (Linear CFR) weighs iteration t by t + 1 in both the regrets and the average.
-- The arrays are `regret` and `avg`, float32 `[n_info, 4]`. Node n owns rows `offset[n] .. offset[n+1]-1`, one per bucket of its street. The counts come from the dataset (`NUM_BUCKETS` of `data/buckets.npz`): 1,601,400 infosets at 200/100/100/100. Each infoset costs 32 bytes, plus 8 with `--count-visits`.
+- The arrays are `regret`, float32 `[n_info, 4]`, and `avg`, float64 `[n_info, 4]`.
+  - With linear weights, a float32 `avg` loses the increments of its most visited rows (the hottest preflop infosets reach 10^7-10^8 updates in a run of billions), so it is float64.
+  - Checkpoint format 1 (float32 `avg`) is refused; retrain.
+- Rows are node-major in node-id order: node n owns rows `offset[n] .. offset[n+1]-1`, one per bucket of its street.
+  - Node ids are DFS pre-order, so the streets interleave (3,182 street changes along the ids).
+  - A street's `[nodes, B, 4]` array is therefore a gather, never a slice: `a[mccfr.street_rows(tree, offset, street)].reshape(-1, B, 4)`.
+- The counts come from the dataset (`NUM_BUCKETS` of `data/buckets.npz`): 1,601,400 infosets at 200/100/100/100.
+- Each infoset costs 48 bytes (16 regret + 32 avg), plus 8 with `--count-visits`.
 - Threads share the arrays without locks (hogwild). Each thread alternates the traverser; threads that each served one player oscillated instead of converging (module docstring). With `--threads 1` a run is deterministic.
 - Outputs, all atomic and all the same format:
   - a checkpoint `<out stem>.ckpt-<iterations>.npz` every 10%, on SIGINT/SIGTERM, and when `--max-hours` runs out;
@@ -208,6 +215,8 @@ The kernel is memory-latency-bound: random reads and writes into 49 MB of arrays
 
 - 300M iterations in 7 min 46 s of training: 643k it/s on average, 769k it/s by the end. 8 threads ran on CPUs 8-15 at load average 19-25.
 - Nine checkpoints and the final output: 64 MB each with visits, 0.1-0.2 s to write; each diagnostic took 1.5-1.8 s.
+  - That run predates the float64 `avg` (checkpoint format 1), so this code refuses its files. Rerun the command to regenerate them.
+  - With float64 `avg`, a checkpoint at this table is 90 MB.
 - Traverser visits per iteration: 1.8 preflop, 5.6 flop, 9.9 turn, 15.0 river. Every infoset was visited.
 - The visit-weighted median visits per infoset (and its 10th percentile) after 300M iterations:
 

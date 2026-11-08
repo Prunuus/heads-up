@@ -110,6 +110,28 @@ def test_offsets_give_each_node_its_streets_bucket_count(tree):
     assert off[-1] == sum(nb[s] * int((tree.street == s).sum()) for s in Street)
 
 
+def test_street_rows_gather_each_streets_per_street_array(tree):
+    """Rows are node-major in node-id order and the streets interleave (DFS pre-order), so a
+    street's [nodes, B, 4] array is a gather (street_rows), and a slice would mix streets."""
+    nb = (7, 5, 4, 3)
+    off = mccfr.infoset_offsets(tree, nb)
+    marked = np.arange(off[-1] * 4).reshape(-1, 4)            # every cell its own value
+    parts = []
+    for s in Street:
+        nodes = np.flatnonzero(tree.street == s)
+        rows = mccfr.street_rows(tree, off, s)
+        assert rows.dtype == np.int64 and len(rows) == len(nodes) * nb[s]
+        assert np.array_equal(rows, np.concatenate([np.arange(off[n], off[n + 1]) for n in nodes]))
+        per = marked[rows].reshape(-1, nb[s], 4)                 # the per-street array
+        for i in (0, len(nodes) // 2, len(nodes) - 1):
+            assert np.array_equal(per[i], marked[off[nodes[i]]:off[nodes[i] + 1]])
+        parts.append(rows)
+    assert np.array_equal(np.sort(np.concatenate(parts)), np.arange(off[-1]))   # a partition
+    assert int((np.diff(tree.street.astype(int)) != 0).sum()) == 3182          # streets interleave
+    for s in (Street.FLOP, Street.TURN, Street.RIVER):
+        assert (np.diff(parts[s]) > 1).any(), s                                # no slice is a street
+
+
 # ---- the evaluator: exact best response on perfect recall
 
 def _fold_to_any_bet(tree, off):
@@ -181,7 +203,8 @@ def test_checkpoint_roundtrip(tree, tmp_path):
     assert m["num_buckets"] == (3, 3, 3, 3) and m["buckets_sha256"] == "synthetic"
     assert (m["starting_stack"], m["small_blind"], m["big_blind"], m["raise_cap"]) == (80, 1, 2, 4)
     assert m["dataset_n"] == 3000 and m["dataset_seed"] == 0
-    assert ck.regret.dtype == ck.avg.dtype == np.float32 and ck.regret.shape == (ck.offset[-1], 4)
+    assert ck.regret.dtype == np.float32 and ck.avg.dtype == np.float64      # avg: review fix 1
+    assert ck.regret.shape == ck.avg.shape == (ck.offset[-1], 4)
     # every 10%: nine checkpoints and the final output, each with its diagnostic
     marks = [mccfr.load_checkpoint(p, tree, None).meta["iterations"] for p in mccfr.checkpoints(out)]
     assert marks == list(range(1000, 10_000, 1000))
@@ -239,6 +262,26 @@ def test_loading_refuses_another_tree_table_or_run(tree, tmp_path, monkeypatch):
     other = class_game(tmp_path / "g2", k=3, n=2000)
     with pytest.raises(ValueError, match="dataset"):
         mccfr.train(tree, other, 4000, str(out), 0, threads=1, buckets_table=None, log_every=1e9)
+
+
+def test_loading_refuses_a_float32_average(tree, tmp_path):
+    """Format 1 kept avg in float32 (it biases heavily visited infosets): refused, with the
+    reason. A format-2 file with a float32 avg is refused by the dtype check."""
+    out = tmp_path / "out.npz"
+    run(tree, class_game(tmp_path / "g", k=3), 2000, out)
+    with np.load(out) as z:
+        arrays = {k: z[k] for k in z.files}
+    arrays["avg"] = arrays["avg"].astype(np.float32)
+    old = tmp_path / "old.npz"
+    np.savez(old, **arrays | {"format": np.int64(1)})
+    with pytest.raises(ValueError, match="format 1 keeps avg in float32"):
+        mccfr.load_checkpoint(old, tree, None)
+    with pytest.raises(ValueError, match="format 1"):          # resuming over it is refused too
+        mccfr.train(tree, class_game(tmp_path / "g", k=3), 4000, str(old), 0, threads=1,
+                    buckets_table=None, log_every=1e9)
+    np.savez(old, **arrays)
+    with pytest.raises(ValueError, match="avg is float32"):
+        mccfr.load_checkpoint(old, tree, None)
 
 
 def _other_tree(tree):
