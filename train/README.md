@@ -108,6 +108,7 @@ Measured on the PC (Ryzen 7 9700X, WSL2), pinned to logical CPUs 8-15 (4 physica
 
 - `load_deals` concatenates the shards into contiguous arrays. It reads only `buckets` and `showdown` unless you pass `cards=True` or `features=True`, and `n=` takes a prefix.
 - It refuses a gap (an unfinished run), shards that disagree (seed, shard size, table), and a dataset bucketed with a table other than `buckets_table` (default `data/buckets.npz`, compared by sha256).
+- It also refuses a dataset whose features came from other designs or another `data/preflop.npz` (`features_sha256`). A changed preflop table with an unchanged bucket table would otherwise pass, and every preflop bucket would differ from the runtime's.
 
 ### After a refit of `data/buckets.npz`
 

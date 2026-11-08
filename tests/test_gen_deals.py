@@ -239,6 +239,28 @@ def test_load_deals_rejects_a_bucket_table_mismatch(tmp_path, small, alt_table):
     assert gd.load_deals(small).meta["n"] == 200         # the default table is the dataset's
 
 
+def test_load_deals_rejects_features_from_another_preflop_table(tmp_path, small, monkeypatch):
+    """T17 M1: the same bucket table with a changed data/preflop.npz changes every preflop
+    feature, so the dataset no longer matches the runtime: load_deals refuses it."""
+    changed = tmp_path / "preflop.npz"
+    with np.load(gd.PREFLOP_TABLE) as z:
+        arrays = {k: z[k] for k in z.files}
+    arrays["strength"] = arrays["strength"] * 0.5
+    np.savez(changed, **arrays)
+    monkeypatch.setattr(gd, "PREFLOP_TABLE", changed)
+    with pytest.raises(ValueError, match="features"):
+        gd.load_deals(small)
+    assert gd.load_deals(small, buckets_table=None).meta["n"] == 200     # synthetic data: no checks
+    monkeypatch.undo()
+    assert gd.load_deals(small).meta["n"] == 200
+
+
+def test_preflop_table_is_the_one_the_runtime_reads():
+    """T17 M4: the features hash covers the file bot.preflop loads."""
+    from bot import preflop
+    assert gd.PREFLOP_TABLE == preflop._DEFAULT_PATH
+
+
 def test_load_deals_rejects_mixed_shards(tmp_path, small):
     out = _copy(small, tmp_path / "foreign")
     other = tmp_path / "other"

@@ -266,16 +266,24 @@ def load_deals(path, buckets_table=ab.DEFAULT_PATH, n: int | None = None, cards:
                features: bool = False) -> Deals:
     """The deals of a dataset directory (or of one shard file), the first n if given.
 
-    Raises ValueError if the shards do not form one complete dataset, or if they were
-    bucketed with a table other than buckets_table (its sha256 must match; None skips this
-    check, for synthetic data). Reads only the arrays asked for, into contiguous arrays.
+    Raises ValueError if the shards do not form one complete dataset, if they were bucketed
+    with a table other than buckets_table (its sha256 must match), or if their features
+    come from other inputs than that table's designs and PREFLOP_TABLE (features_sha256:
+    a changed data/preflop.npz moves every preflop bucket). None skips both table checks,
+    for synthetic data. Reads only the arrays asked for, into contiguous arrays.
     """
     shards = _dataset(path)
     first = shards[0][1]
-    if buckets_table is not None and first["buckets_sha256"] != file_sha256(buckets_table):
-        raise ValueError(f"{path}: bucketed with the table of sha256 {first['buckets_sha256'][:16]}..., "
-                         f"not {buckets_table} (sha256 {file_sha256(buckets_table)[:16]}...). Rebucket it: "
-                         f"python -m train.gen_deals --rebucket --out {path} --buckets {buckets_table}")
+    if buckets_table is not None:
+        t = open_table(buckets_table)
+        if first["buckets_sha256"] != t.buckets_sha256:
+            raise ValueError(f"{path}: bucketed with the table of sha256 {first['buckets_sha256'][:16]}..., "
+                             f"not {buckets_table} (sha256 {t.buckets_sha256[:16]}...). Rebucket it: "
+                             f"python -m train.gen_deals --rebucket --out {path} --buckets {buckets_table}")
+        if first["features_sha256"] != t.features_sha256:
+            raise ValueError(f"{path}: its features sha256 {first['features_sha256'][:16]}... is not that of "
+                             f"{buckets_table}'s designs and {PREFLOP_TABLE} ({t.features_sha256[:16]}...): "
+                             "the inputs of the features changed since generation. Regenerate the dataset")
     total = sum(m["count"] for _, m in shards)
     n = total if n is None else n
     if not 0 < n <= total:
