@@ -58,7 +58,9 @@ weight is the iteration number. That is what makes resume exact (below).
 Checkpoints and resume (R23). The state is (regret, avg, iterations done), plus the
 diagnostic history and optional visit counts. It is written atomically (format FORMAT = 2:
 float64 avg; a format-1 file, float32 avg from before that change, is refused) every 10% of
-the iterations (<out stem>.ckpt-<iterations>.npz), on SIGINT/SIGTERM, and when --max-hours of
+the iterations (<out stem>.ckpt-<iterations>.npz), whenever CHECKPOINT_MINUTES of wall clock
+have passed since the last checkpoint (an unattended run, e.g. one a WSL2 shutdown or
+Windows sleep kills, loses at most that much), on SIGINT/SIGTERM, and when --max-hours of
 training time runs out; the final state goes to `out`. A rerun with the same arguments
 resumes from the latest of those files (refusing one from another run: tree, table, dataset,
 seed, linear). It continues the iteration count, so the rng streams and the linear weights
@@ -109,6 +111,7 @@ from train import gen_deals as gd
 
 FORMAT = 2                        # 2: avg float64 (1: float32, refused)
 CHECKPOINTS = 10                  # one every 10% of the iterations
+CHECKPOINT_MINUTES = 30.0         # and at least one per 30 minutes of wall clock
 EVAL_ROWS = 8192                  # rows the checkpoint diagnostic samples from a large dataset
 EVAL_STREAM = 18                  # rng (seed, EVAL_STREAM) picks those rows
 DIAG_COLUMNS = ("iterations", "value", "br_button", "br_bb", "exploitability", "exact")
@@ -602,7 +605,8 @@ def load_checkpoint(path, tree: BettingTree | None = None, buckets_table=ab.DEFA
     for name, dtype in (("regret", np.float32), ("avg", np.float64)):
         a = getattr(ck, name)
         if a.shape != (n_info, 4) or a.dtype != dtype:
-            raise ValueError(f"{path}: {name} is {a.dtype} {a.shape}, expected {np.dtype(dtype)} {(n_info, 4)}")
+            raise ValueError(f"{path}: {name} is {a.dtype} {a.shape}, "
+                             f"expected {np.dtype(dtype)} {(n_info, 4)}")
     if ck.visits.shape != ((n_info,) if m["count_visits"] else (0,)):
         raise ValueError(f"{path}: visits has shape {ck.visits.shape}")
     return ck
@@ -666,14 +670,17 @@ def _fmt_time(seconds: float) -> str:
 def train(tree: BettingTree, deals_path, iterations: int, out: str, seed: int, linear: bool = True, *,
           threads: int | None = None, buckets_table=ab.DEFAULT_PATH, eval_rows: int = EVAL_ROWS,
           max_hours: float | None = None, count_visits: bool = False, log_every: float = 60.0,
-          checkpoints_per_run: int = CHECKPOINTS) -> None:
+          checkpoints_per_run: int = CHECKPOINTS,
+          checkpoint_minutes: float | None = CHECKPOINT_MINUTES) -> None:
     """Run external-sampling MCCFR until `iterations` are done, writing the final state to out.
 
     Resumes from the latest saved state of out. Checkpoints every 1/checkpoints_per_run of the
-    iterations, each with the exploitability diagnostic on eval_rows rows (0: none). Stops
-    early, with a checkpoint, on SIGINT (then raises KeyboardInterrupt) or SIGTERM (SystemExit
-    143), and when the run's training time reaches max_hours (then also writes out).
-    buckets_table None skips the table checks (synthetic data). Module docstring: the details.
+    iterations, and whenever checkpoint_minutes of wall clock have passed since the last
+    checkpoint (None or <= 0: never), each with the exploitability diagnostic on eval_rows rows
+    (0: none). Stops early, with a checkpoint, on SIGINT (then raises KeyboardInterrupt) or
+    SIGTERM (SystemExit 143), and when the run's training time reaches max_hours (then also
+    writes out). buckets_table None skips the table checks (synthetic data). Module docstring:
+    the details.
     """
     if iterations < 1:
         raise ValueError("iterations must be >= 1")
@@ -753,8 +760,10 @@ def train(tree: BettingTree, deals_path, iterations: int, out: str, seed: int, l
          f"{n_info:,} infosets (buckets {nb}), {threads} threads, seed {seed}, "
          f"{'linear' if linear else 'uniform'} weights, from {done:,}")
     block, start = min(4096, iterations - done), done
-    t_start = t_log = time.perf_counter()
+    t_start = t_log = t_ckpt = time.perf_counter()
     spent0, log_done = spent, done
+    ckpt_every = (checkpoint_minutes * 60 if checkpoint_minutes is not None and checkpoint_minutes > 0
+                  else None)
     with _Stop() as stop:
         while done < iterations:
             nxt = next(m for m in marks if m > done)
@@ -780,8 +789,10 @@ def train(tree: BettingTree, deals_path, iterations: int, out: str, seed: int, l
                 if out_of_time and done < iterations:
                     _say(f"mccfr: --max-hours {max_hours} reached at {done:,} iterations")
                 break
-            if done == nxt or stop.signum is not None:
+            clock_due = ckpt_every is not None and time.perf_counter() - t_ckpt >= ckpt_every
+            if done == nxt or stop.signum is not None or clock_due:
                 save(checkpoint_path(out, done))
+                t_ckpt = time.perf_counter()
             if stop.signum is not None:
                 _say(f"mccfr: stopped by signal {stop.signum} at {done:,} iterations; "
                      "rerun the same command to resume")
@@ -809,12 +820,15 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--max-hours", type=float, default=None,
                     help="stop (checkpoint and final output) after this much training time")
     ap.add_argument("--log-every", type=float, default=60.0, help="seconds between progress lines")
+    ap.add_argument("--checkpoint-minutes", type=float, default=CHECKPOINT_MINUTES,
+                    help="also checkpoint once this much wall clock has passed since the last one (0: never)")
     ap.add_argument("--count-visits", action="store_true", help="also count traverser visits per infoset")
     a = ap.parse_args(argv)
     try:
         train(get_tree(), a.deals, a.iterations, a.out, a.seed, not a.no_linear, threads=a.threads,
               buckets_table=None if a.buckets.lower() == "none" else a.buckets, eval_rows=a.eval_rows,
-              max_hours=a.max_hours, count_visits=a.count_visits, log_every=a.log_every)
+              max_hours=a.max_hours, count_visits=a.count_visits, log_every=a.log_every,
+              checkpoint_minutes=a.checkpoint_minutes)
     except KeyboardInterrupt:
         raise SystemExit(128 + signal.SIGINT) from None
 

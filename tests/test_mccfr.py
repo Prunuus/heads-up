@@ -241,6 +241,27 @@ def test_resume_from_a_checkpoint_equals_an_uninterrupted_run(tree, tmp_path):
     assert longer.meta["iterations"] == 9000
 
 
+def test_wall_clock_checkpoints_between_the_marks(tree, tmp_path):
+    """checkpoint_minutes: a checkpoint once that much wall clock has passed since the last one
+    (an unattended run loses at most that much). Here it is ~0, so every block writes one: each
+    complete and atomic, none on a 10% mark, and training is the same as without them."""
+    deals = class_game(tmp_path / "g", k=3)
+    out = tmp_path / "run" / "out.npz"
+    ck = run(tree, deals, 30_000, out, checkpoints_per_run=1, checkpoint_minutes=1e-9, eval_rows=0)
+    files = mccfr.checkpoints(out)
+    its = [mccfr.load_checkpoint(p, tree, None).meta["iterations"] for p in files]
+    assert len(its) >= 2 and its == sorted(set(its)) and 0 < its[0] and its[-1] < 30_000, its
+    assert not [f for f in out.parent.iterdir() if f.name.endswith(".tmp")]
+    plain = run(tree, deals, 30_000, tmp_path / "plain" / "out.npz", checkpoints_per_run=1, eval_rows=0)
+    assert mccfr.checkpoints(tmp_path / "plain" / "out.npz") == []      # the 30-minute default
+    assert np.array_equal(ck.regret, plain.regret) and np.array_equal(ck.avg, plain.avg)
+    # each one is a resume point: keep only the first, resume, and get the same bits
+    for f in files[1:] + [out]:
+        f.unlink()
+    resumed = run(tree, deals, 30_000, out, checkpoints_per_run=1, eval_rows=0)
+    assert np.array_equal(resumed.regret, plain.regret) and np.array_equal(resumed.avg, plain.avg)
+
+
 def test_loading_refuses_another_tree_table_or_run(tree, tmp_path, monkeypatch):
     deals = class_game(tmp_path / "g", k=3)
     out = tmp_path / "out.npz"

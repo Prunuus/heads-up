@@ -144,7 +144,7 @@ The trainer solves the abstract game of the deal dataset: chance draws a row uni
 - Each infoset costs 48 bytes (16 regret + 32 avg), plus 8 with `--count-visits`.
 - Threads share the arrays without locks (hogwild). Each thread alternates the traverser; threads that each served one player oscillated instead of converging (module docstring). With `--threads 1` a run is deterministic.
 - Outputs, all atomic and all the same format:
-  - a checkpoint `<out stem>.ckpt-<iterations>.npz` every 10%, on SIGINT/SIGTERM, and when `--max-hours` runs out;
+  - a checkpoint `<out stem>.ckpt-<iterations>.npz` every 10%, whenever `--checkpoint-minutes` (default 30) of wall clock have passed since the last one, on SIGINT/SIGTERM, and when `--max-hours` runs out;
   - the final state in `--out`.
   - Each one carries the tree hash, the bucket-table and features hashes, the counts, the game constants, the iterations, seed, linear flag and the dataset identity. `load_checkpoint` refuses a mismatch with the current tree or table (Task 19 exports from it).
 - At each checkpoint it logs a diagnostic: the self-play value, both best responses, and the exploitability (bb/hand) of the average strategy.
@@ -172,6 +172,9 @@ The plan's floor of 200M iterations takes about 5 minutes at the measured rates.
 - Detached with `nohup ... &`, the run survives the terminal. `tmux new -s mccfr` then the same command without `nohup`/`&` works too (detach with Ctrl-b d, reattach with `tmux attach -t mccfr`).
 - `--threads` defaults to the CPUs the process may use, so `taskset -c 8-15` gives 8 threads. Use 16 only when nothing timing-sensitive shares the PC.
 - `--max-hours` caps the training time of the run, summed over resumes. When it runs out, the trainer writes a checkpoint and the final output at the iterations done.
+- The 10% marks of a 24B target fall 36-73 minutes apart, so the 30-minute clock checkpoints bound what a WSL2 shutdown or a Windows sleep can cost.
+  - At 400/400/400/400 with `--count-visits`, a checkpoint is about 357 MB: 102 MB regret, 204 MB avg, 51 MB visits.
+  - A 6-hour run writes 12-20 of them, 4-7 GB. Any but the newest may be deleted.
 - `--count-visits` stores traverser visits per infoset in every checkpoint, so Task 19 and the sizing below can see which infosets are under-trained.
 
 Monitor:
