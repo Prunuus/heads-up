@@ -303,12 +303,15 @@ def test_exploitability_keeps_falling_with_hogwild_threads(tree, tmp_path):
 
 @pytest.mark.slow
 def test_one_bucket_game_is_seed_stable(tree, tmp_path):
+    """Measured on 4 threads, seeds 1 and 2: both converge to +0.345 bb for the button (these
+    4,000 random showdowns do not average exactly 0, so the big blind folds to avoid big
+    pots). The two values differ by 0.024 at 500k iterations, by <= 0.003 from 1M on."""
     rng = np.random.default_rng(0)
     deals = write_dataset(tmp_path / "g", np.zeros((4000, 2, 4)), rng.integers(-1, 2, 4000), (1, 1, 1, 1))
     buckets, showdown = _rows(deals)
     values = []
     for seed in (1, 2):
-        ck = run(tree, deals, 300_000, tmp_path / f"o{seed}.npz", seed=seed, threads=4)
+        ck = run(tree, deals, 2_000_000, tmp_path / f"o{seed}.npz", seed=seed, threads=4, eval_rows=0)
         s = mccfr.average_strategy(ck.avg, tree, ck.offset)
         values.append(mccfr.profile_value(tree, s, ck.offset, buckets, showdown))
     assert abs(values[0] - values[1]) < 0.02, values
@@ -319,10 +322,15 @@ def test_strong_bucket_raises_more_than_weak(tree, tmp_path):
     """100 buckets a street; each player holds bucket 0, 33, 66 or 99 for the whole hand and the
     higher one wins, so bucket 99 always wins (splits against 99).
 
-    Measured at the first river node (checked down, BB to act) after 3M iterations: bucket 99
-    raises 0.835-0.85 (two seeds), the bluff-catchers 33 and 66 check (0.00, 0.18-0.19) and the
-    worst bucket bluffs 0.22. With information only on the river the check-down line is
-    almost never played, so that node's average stays near its prior (2,400 visits in 10M)."""
+    Measured after 3M iterations on 4 threads, 8 runs. The hand is checked down to the river.
+    - The big blind acts first there. Bucket 99 raises 0.80-0.85: it checks some to check-raise,
+      so 0.8 is no margin. The bluff-catchers 33 and 66 raise 0.00 and 0.15-0.19, and bucket 0
+      bluffs 0.21-0.23.
+    - When the big blind checks, the button acts: checking back ends the hand, so trapping is
+      worthless and bucket 99 raises 1.000 in every run. Bucket 0 also bets 1.000 there (it
+      cannot win a showdown, so a bluff is free); 33 and 66 bet 0.15-0.37.
+    With information only on the river instead, the check-down line is almost never played, so
+    these nodes' averages stay near the prior (2,400 visits in 10M iterations)."""
     rng = np.random.default_rng(3)
     n = 20_000
     cls = rng.choice(np.array([0, 33, 66, 99]), size=(n, 2))
@@ -330,11 +338,20 @@ def test_strong_bucket_raises_more_than_weak(tree, tmp_path):
                           np.sign(cls[:, 0] - cls[:, 1]), (100, 100, 100, 100))
     ck = run(tree, deals, 3_000_000, tmp_path / "o.npz", threads=4, eval_rows=0)
     s = mccfr.average_strategy(ck.avg, tree, ck.offset)
-    node = node_from_actions((C,) * 6, tree)          # the first river node: checked down, BB to act
-    assert tree.street[node] == Street.RIVER and not tree.actor_is_button[node]
-    raise_p = s[ck.offset[node]:ck.offset[node + 1], H] + s[ck.offset[node]:ck.offset[node + 1], P]
-    assert raise_p[99] > 0.8, raise_p[99]
-    assert raise_p[99] > raise_p[[0, 33, 66]].max() + 0.4, raise_p[[0, 33, 66, 99]]
+
+    def raise_p(node):
+        rows = s[ck.offset[node]:ck.offset[node + 1]]
+        return rows[:, H] + rows[:, P]
+
+    bb_first = node_from_actions((C,) * 6, tree)        # the first river node: checked down, BB to act
+    button_first = node_from_actions((C,) * 7, tree)    # the button's first river node: checked to
+    assert tree.street[bb_first] == tree.street[button_first] == Street.RIVER
+    assert not tree.actor_is_button[bb_first] and tree.actor_is_button[button_first]
+    p = raise_p(button_first)
+    assert p[99] > 0.8, p[[0, 33, 66, 99]]
+    assert p[99] > p[[33, 66]].max() + 0.4, p[[0, 33, 66, 99]]
+    p = raise_p(bb_first)
+    assert p[99] > 0.7 and p[99] > p[[0, 33, 66]].max() + 0.4, p[[0, 33, 66, 99]]
 
 
 @pytest.mark.slow
