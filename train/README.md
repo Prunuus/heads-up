@@ -149,9 +149,18 @@ The trainer solves the abstract game of the deal dataset: chance draws a row uni
 ### The long run
 
     mkdir -p train_data/mccfr
-    nohup python -m train.mccfr --deals train_data/d10m --iterations 200_000_000 \
+    nohup python -m train.mccfr --deals train_data/d10m --iterations 12_000_000_000 \
         --out train_data/mccfr/blueprint_raw.npz --seed 0 --threads 16 --count-visits \
         --max-hours 6 > train_data/mccfr/train.log 2>&1 &
+
+The plan's floor of 200M iterations takes about 5 minutes at the measured rates. A 6-hour run is 10-30 billion iterations, so give it `--max-hours 6` and an iteration target it will not reach before that. Spend the surplus on finer buckets (sizing below). For finer buckets:
+- refit the table first (the "More buckets" section above);
+- re-bucket the dataset, which takes seconds per million deals;
+- then train:
+
+      python -m train.fit_buckets --per-street 1000000 --preflop 400 --flop-grid 20x20 \
+          --turn-grid 20x20 --river 400 --workers 8 --seed 0 --out data/buckets.npz
+      python -m train.gen_deals --rebucket --out train_data/d10m
 
 - Detached with `nohup ... &`, the run survives the terminal. `tmux new -s mccfr` then the same command without `nohup`/`&` works too (detach with Ctrl-b d, reattach with `tmux attach -t mccfr`).
 - `--threads` defaults to the CPUs the process may use, so `taskset -c 8-15` gives 8 threads. Use 16 only when nothing timing-sensitive shares the PC.
@@ -188,11 +197,36 @@ The kernel is memory-latency-bound: random reads and writes into 49 MB of arrays
 - The same code in pure Python (`NUMBA_DISABLE_JIT=1`) runs 649 it/s. Numba is required: the plan's rule is numba below 20k it/s.
 - `--count-visits` costs nothing measurable.
 - The rate also drifts as training proceeds, because the walk's length depends on the strategies. The verification run below gives the rate over a long horizon.
+- Bucket counts barely matter: with every bucket split four ways (800/400/400/400, 6.4M infosets, 195 MB), 8 threads ran 311k it/s, against 347k and 270k for the default table measured before and after it.
 - Numba compiles the kernels on first use (about 2 s) and caches them in `train/__pycache__`.
+
+### The verification run (2M dataset, default table)
+
+    taskset -c 8-15 python -m train.mccfr --deals train_data --iterations 300_000_000 \
+        --out train_data/mccfr-verify/blueprint_raw.npz --seed 0 --threads 8 --count-visits \
+        --max-hours 0.30 --log-every 60
+
+- 300M iterations in 7 min 46 s of training: 643k it/s on average, 769k it/s by the end. 8 threads ran on CPUs 8-15 at load average 19-25.
+- Nine checkpoints and the final output: 64 MB each with visits, 0.1-0.2 s to write; each diagnostic took 1.5-1.8 s.
+- Traverser visits per iteration: 1.8 preflop, 5.6 flop, 9.9 turn, 15.0 river. Every infoset was visited.
+- The visit-weighted median visits per infoset (and its 10th percentile) after 300M iterations:
+
+  | street | median | 10th percentile |
+  |---|---|---|
+  | preflop | 255k | 28k |
+  | flop | 97k | 11k |
+  | turn | 35k | 4.2k |
+  | river | 23k | 2.2k |
+
+  Visits per infoset scale as iterations / buckets. Use that to size a run.
+- The average strategy is sensible already:
+  - the button folds preflop bucket 0, and raises buckets 150-199 at the root 95-97% of the time;
+  - facing a pot raise, the big blind folds 0 and 50, calls 150, and re-raises 199 94% of the time;
+  - at the checked-down river node, the nut buckets bet and the weak ones check.
 
 ### Checks
 
     python -m pytest -q tests/test_mccfr.py             # engine payoffs, exact best response, convergence, checkpoints
     python -m pytest -q -m slow tests/test_mccfr.py     # 8-thread convergence, the plan's behaviour tests, SIGTERM + resume
 
-The default tests take about 10 s. The key one trains on a perfect-recall game: three hand classes, the same bucket on every street. On that game the best response is exact, and the test asserts that the exploitability falls at every checkpoint, on one thread and on two. It falls about as 1/sqrt(T): 0.194 bb/hand at 200k iterations, 0.032 at 2M, 0.010 at 20M.
+The default tests take about 10 s. The key one trains on a perfect-recall game: three hand classes, the same bucket on every street. On that game the best response is exact. The test asserts that the exploitability falls below a measured threshold, on one thread (falling at every checkpoint) and on two (hogwild). It falls about as 1/sqrt(T): 0.194 bb/hand at 200k iterations, 0.032 at 2M, 0.010 at 20M. Either threading bug the trainer had during development fails the two-thread case (module docstring of `_run_block`).
