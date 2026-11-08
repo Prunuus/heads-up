@@ -364,6 +364,86 @@ def test_online_estimate_drives_the_grace(monkeypatch):
     assert memory["tm"].grace_s == pytest.approx(grace_for_cpu_factor(2.5))
 
 
+# ------------------------------------------------- sim time_scale (ruling R30b)
+
+class _StepClock:
+    """A fake perf_counter that advances `step` seconds per call."""
+
+    def __init__(self, step):
+        self.t, self.step = 1000.0, step
+
+    def __call__(self):
+        self.t += self.step
+        return self.t
+
+
+def test_sim_time_scale_is_read_from_the_config():
+    from sim.match import SimAgentConfig
+    assert policy.sim_time_scale(SimAgentConfig(time_scale=2.5)) == 2.5
+    assert policy.sim_time_scale(AgentConfig()) == 1.0         # the real judge's config
+    for bad in (0.0, -1.0, float("nan"), float("inf"), "x", None):
+        assert policy.sim_time_scale(SimAgentConfig(time_scale=bad)) == 1.0
+    assert policy.sim_time_scale(None) == 1.0
+
+
+def test_sim_time_scale_scales_the_clock_and_the_warmup_factor(monkeypatch):
+    from sim.match import SimAgentConfig
+    monkeypatch.setattr(policy, "_clock", _StepClock(0.001))
+    bot = policy.PolicyBot()
+    bot.cpu_factor = 1.2
+    memory = {}
+    bot.new_half(SimAgentConfig(time_scale=2.5), memory)
+    tm = memory["tm"]
+    assert memory["time_scale"] == 2.5
+    assert tm.grace_s == pytest.approx(grace_for_cpu_factor(1.2 * 2.5))
+    assert tm.clock() - tm.clock() == pytest.approx(-0.0025)  # each 1 ms step reads 2.5 ms
+    tm.used = 0.0
+    bot.on_hand_end(None, memory)                     # charged in full: one scaled step
+    assert tm.used == pytest.approx(0.0025)
+    # The judge's plain AgentConfig: this machine's clock and the warmup factor as is.
+    memory = {}
+    bot.new_half(AgentConfig(), memory)
+    assert memory["time_scale"] == 1.0
+    assert memory["tm"].grace_s == pytest.approx(grace_for_cpu_factor(1.2))
+    assert memory["tm"].clock is policy._clock
+
+
+@pytest.mark.parametrize("scale", [1.0, 2.5])
+def test_sim_time_scale_reaches_the_online_estimate(monkeypatch, scale):
+    from sim.match import SimAgentConfig
+    step = 20e-6             # each timed preflop decision reads 20 us x scale
+    monkeypatch.setattr(policy, "_clock", _StepClock(step))
+    bot = policy.PolicyBot()
+    bot.cpu_factor = 1.0
+    memory = {}
+    bot.new_half(SimAgentConfig(time_scale=scale), memory)
+    pre = [o for o in _observations("cpu", 60) if o.street == Street.PREFLOP]
+    for obs in pre:
+        bot.choose_action(obs, memory)
+    online = step * scale / policy.PREFLOP_REF_S
+    assert memory["cpu"].factor() == pytest.approx(online)
+    assert memory["tm"].grace_s == pytest.approx(grace_for_cpu_factor(max(scale, online)))
+
+
+def test_in_a_scaled_sim_the_bots_count_covers_the_charge():
+    # The T9 invariant under emulation: the bot's grace never exceeds the sim's, so its
+    # own count stays at or above what the sim charges.
+    from sim.match import play_half
+    seen = []
+
+    class Rec(policy.PolicyBot):
+        def new_half(self, config, memory):
+            super().new_half(config, memory)
+            seen.append(memory)
+
+    for scale in (1.0, 3.0):
+        seen.clear()
+        h = play_half(Rec, ZOO["calling_station"], "ts", 1, deals=40, time_scale=scale)
+        assert h.errors_a == 0 and seen[0]["time_scale"] == scale
+        assert h.bank_a > 0.0 or scale == 1.0           # 3x: grace 0.25 ms, so it charges
+        assert seen[0]["tm"].used >= 0.95 * h.bank_a
+
+
 # ------------------------------------------------------------------------ warmup
 
 def test_warmup_is_idempotent_and_recorded():

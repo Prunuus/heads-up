@@ -3,10 +3,12 @@
 compute_features(obs, iters, rng) turns an Observation into a frozen Features record:
 - preflop: eq = now = the preflop table value (equity vs a random hand, 3,000 rollouts
   per hand class offline), nut = 0;
-- postflop: eq = equity_vs_random and now = strength_now with `iters` rollouts each (on
-  the river they are the same quantity, so it is computed once), nut = nut_flags.
-`iters` comes from the caller's time manager. iters <= 0 means no Monte Carlo: both use
-bot.equity's cheap deterministic estimate (then eq == now) and rng is left untouched.
+- postflop: eq = equity_vs_random with `iters` rollouts, nut = nut_flags, and now =
+  strength_now's deterministic estimate (no rollouts). No policy reads `now`; its
+  rollouts were 20-30% of flop/turn compute (T10 review M7, ablated in Task 12), so every
+  rollout goes to eq. On the river eq is already our made hand's strength: now = eq.
+`iters` comes from the caller's time manager. iters <= 0 means no Monte Carlo: eq uses
+bot.equity's cheap deterministic estimate too (then eq == now) and rng is left untouched.
 
 Module state is read-only; everything per-half lives with the caller.
 """
@@ -76,6 +78,7 @@ class Features:
     pre                     preflop strength of our hole (any street); None if unavailable
     eq                      equity vs a random hand (preflop: the table value)
     now                     strength of our made hand vs random hands on this board
+                            (deterministic estimate; on the river, eq)
     nut                     bot.equity.nut_flags bits (0 preflop): 1 nuts now, 2 paired
                             board, 4 flush possible, 8 ace-flush holding
     spr                     effective stack behind after matching the bet, over the pot
@@ -88,7 +91,7 @@ class Features:
     opp_raises_before       opponent bets/raises on earlier streets of this hand
     my_raised_this_street   our own bets/raises on this street
     facing_frac             to_call / pot before the opponent's last bet (0 when free)
-    iters                   rollouts used for eq and now (0: deterministic estimate)
+    iters                   rollouts used for eq (0: deterministic estimate)
     """
 
     street: Street
@@ -125,7 +128,7 @@ def compute_features(obs: Observation, iters: int, rng: np.random.Generator) -> 
     elif nb in (3, 4, 5):
         iters = max(int(iters), 0)
         eq = equity.equity_vs_random(hole, board, iters, rng)
-        now = eq if (iters == 0 or nb == 5) else equity.strength_now(hole, board, iters, rng)
+        now = eq if (iters == 0 or nb == 5) else equity.strength_now(hole, board, 0, rng)
         nut = equity.nut_flags(hole, board)
     else:
         raise ValueError(f"board must have 0, 3, 4 or 5 cards, got {nb}")

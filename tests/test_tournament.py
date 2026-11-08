@@ -136,3 +136,31 @@ def test_resolve_bot():
     with pytest.raises(ValueError):
         resolve_bot("nonexistent_thing")
     assert HOLDOUT | TRAIN == set(ZOO)
+
+
+_SCALES_SEEN = []
+
+
+class _ScaleRecorder:
+    def new_half(self, config, memory):
+        _SCALES_SEEN.append(config.time_scale)
+
+    def choose_action(self, obs, memory):
+        return Action.CHECK_CALL
+
+    def on_hand_end(self, result, memory):
+        pass
+
+
+def test_time_scale_reaches_every_match():
+    _SCALES_SEEN.clear()
+    focus_eval(_ScaleRecorder, {"cs": ZOO["calling_station"]}, ["t1"], 5, workers=1,
+               time_scale=2.5)
+    paired_diff(_ScaleRecorder, _ScaleRecorder, {"cs": ZOO["calling_station"]}, ["t1"], 5,
+                time_scale=2.5)
+    run_round_robin({"a": _ScaleRecorder, "b": _ScaleRecorder}, ["t1"], 5, workers=1,
+                    time_scale=2.5)
+    assert _SCALES_SEEN == [2.5] * 10           # 2 + 4 + 4 halves of our recorder
+    _SCALES_SEEN.clear()
+    focus_eval(_ScaleRecorder, {"cs": ZOO["calling_station"]}, ["t1"], 5, workers=1)
+    assert _SCALES_SEEN == [1.0, 1.0]           # the default is this machine's speed

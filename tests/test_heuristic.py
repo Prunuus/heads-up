@@ -86,6 +86,45 @@ def test_heuristic_params_defaults_are_the_briefs():
     assert pickle.loads(pickle.dumps(p)) == p
 
 
+_SCALARS = ("open_min", "threebet_min", "call_margin", "pot_vs_half_cut", "bluff_freq",
+            "nonnut_penalty", "range_weight", "raise_step", "pre_discount", "ip_thin_shift")
+_STREET_TUPLES = ("range_discount", "value_raise", "bet_range", "thin_value")
+
+
+def test_params_cover_every_field():
+    names = {f.name for f in dataclasses.fields(HeuristicParams)}
+    assert names == set(_SCALARS) | set(_STREET_TUPLES)
+
+
+@pytest.mark.parametrize("name", _SCALARS)
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf"), "0.5", None,
+                                 True, (0.5, 0.5, 0.5)])
+def test_params_reject_a_bad_scalar(name, bad):
+    # A NaN or a wrong type would raise inside the policy, where the layer catches it and
+    # falls back: a silent strength loss (T10 review M3). Fail at construction instead.
+    with pytest.raises(ValueError, match=name):
+        HeuristicParams(**{name: bad})
+
+
+@pytest.mark.parametrize("name", _STREET_TUPLES)
+@pytest.mark.parametrize("bad", [(0.5, 0.5), (0.5,) * 4, (0.5, float("nan"), 0.5),
+                                 (0.5, float("inf"), 0.5), (0.5, "x", 0.5), 0.5, "abc", None,
+                                 (0.5, True, 0.5)])
+def test_params_reject_a_bad_street_tuple(name, bad):
+    with pytest.raises(ValueError, match=name):
+        HeuristicParams(**{name: bad})
+
+
+def test_params_normalise_numbers_and_lists():
+    p = HeuristicParams(open_min=np.float64(0.4), call_margin=0, value_raise=[0.7, 0.75, 1],
+                        thin_value=np.array([0.6, 0.62, 0.64]))
+    assert type(p.open_min) is float and type(p.call_margin) is float
+    assert p.value_raise == (0.7, 0.75, 1.0) and all(type(x) is float for x in p.value_raise)
+    assert p.thin_value == (0.6, 0.62, 0.64) and isinstance(p.thin_value, tuple)
+    assert hash(p) == hash(dataclasses.replace(p))          # still hashable and comparable
+    assert pickle.loads(pickle.dumps(p)) == p
+
+
 def test_always_legal_on_10k_random_observations(obs10k):
     assert len(obs10k) == 10_000
     streets = {o.street for o in obs10k}
@@ -236,6 +275,23 @@ def test_compute_features_iters_zero(street):
         heuristic_action(obs, compute_features(obs, 0, rng), HeuristicParams(), rng)
         ts.append(time.perf_counter() - t0)
     assert float(np.median(ts)) < 0.0005                # generous: ~0.15 ms measured
+
+
+@pytest.mark.parametrize("street", [Street.FLOP, Street.TURN, Street.RIVER])
+def test_monte_carlo_goes_to_eq_only(street):
+    # No policy reads `now` (T10 review M7: 20-30% of flop/turn compute), so it is the
+    # deterministic made-hand estimate and every rollout goes to eq. On the river eq is
+    # already the made hand's strength, so now == eq.
+    from bot import equity
+    obs = _street_observation(street)
+    rng, ref = np.random.default_rng(3), np.random.default_rng(3)
+    feats = compute_features(obs, 64, rng)
+    eq = equity.equity_vs_random(obs.hole_cards, obs.board, 64, ref)
+    assert feats.eq == eq and rng.bit_generator.state == ref.bit_generator.state
+    if street == Street.RIVER:
+        assert feats.now == feats.eq
+    else:
+        assert feats.now == equity.strength_now(obs.hole_cards, obs.board, 0, None)
 
 
 def test_feature_values_from_history():

@@ -326,3 +326,120 @@ def test_action_counts_calling_station():
     assert set(h.actions_a) == {"CHECK_CALL"} and set(h.actions_b) == {"CHECK_CALL"}
     assert h.actions_a["CHECK_CALL"] > 0 and not h.bank_exhausted_a
     assert h.ctx_a.get("faced_fold", 0) == 0 and h.ctx_a["pre"] > 0
+
+
+# ---- time_scale: emulate a slower CPU for each bot (ruling R30b)
+
+class _Tick:
+    """Stands in for sim.match's `time`: perf_counter advances `step` s per call, so
+    every request (one start and one end reading) measures exactly `step`."""
+
+    def __init__(self, step):
+        self.t, self.step = 0.0, step
+
+    def perf_counter(self):
+        self.t += self.step
+        return self.t
+
+
+def test_grace_for_time_scale_is_the_free_ms_minus_scaled_plumbing():
+    from sim.match import SIM_PLUMBING_S, grace_for_time_scale
+    assert SIM_PLUMBING_S == 0.00025
+    assert grace_for_time_scale(1.0) == pytest.approx(0.00075)      # the old default
+    assert grace_for_time_scale(2.5) == pytest.approx(0.000375)
+    assert grace_for_time_scale(4.0) == pytest.approx(0.0)
+    assert grace_for_time_scale(6.0) == pytest.approx(-0.0005)      # plumbing overrun is charged
+
+
+def test_time_scale_scales_the_charged_time(monkeypatch):
+    import sim.match as sm
+    monkeypatch.setattr(sm, "time", _Tick(0.001))
+    one = play_half(call_factory, call_factory, "s1", 1, deals=6, grace_s=0.0)
+    three = play_half(call_factory, call_factory, "s1", 1, deals=6, grace_s=0.0,
+                      time_scale=3.0)
+    assert one.calls_a == three.calls_a and one.errors_a == three.errors_a == 0
+    assert one.bank_a == pytest.approx(0.001 * one.calls_a)          # one tick per request
+    assert three.bank_a == pytest.approx(3 * one.bank_a)
+    assert (one.max_call_a, three.max_call_a) == (pytest.approx(0.001), pytest.approx(0.003))
+
+
+def test_time_scale_is_per_bot(monkeypatch):
+    import sim.match as sm
+    monkeypatch.setattr(sm, "time", _Tick(0.001))
+    h = play_half(call_factory, call_factory, "s1", 1, deals=6, grace_s=0.0,
+                  time_scale=(3.0, 1.0))
+    assert h.bank_a == pytest.approx(0.003 * h.calls_a)
+    assert h.bank_b == pytest.approx(0.001 * h.calls_b)
+
+
+def test_time_scale_scales_the_action_timeout(monkeypatch):
+    # 1 ms per request against a 2 ms timeout: fine at 1x, a timeout (error) at 3x
+    import sim.match as sm
+    monkeypatch.setattr(sm, "time", _Tick(0.001))
+
+    class Raiser(_Call):
+        def choose_action(self, obs, memory):
+            return Action.RAISE_POT if Action.RAISE_POT in obs.legal_actions else Action.CHECK_CALL
+
+    fast = play_half(Raiser, call_factory, "s1", 1, deals=3, action_timeout_s=0.002)
+    slow = play_half(Raiser, call_factory, "s1", 1, deals=3, action_timeout_s=0.002,
+                     time_scale=3.0)
+    assert fast.errors_a == 0 and "RAISE_POT" in fast.actions_a
+    assert slow.errors_a >= 1 and "RAISE_POT" not in slow.actions_a   # replies discarded
+
+
+def test_default_grace_follows_the_time_scale(monkeypatch):
+    # 0.5 ms per request: inside the 0.75 ms grace at 1x, but at 4x the default grace is
+    # 1 ms - 4 x 0.25 ms = 0, so all 2 ms of every request is charged.
+    import sim.match as sm
+    monkeypatch.setattr(sm, "time", _Tick(0.0005))
+    assert play_half(call_factory, call_factory, "s1", 1, deals=20).bank_a == 0.0
+    h = play_half(call_factory, call_factory, "s1", 1, deals=20, time_scale=4.0)
+    assert h.bank_a == pytest.approx(0.002 * h.calls_a)
+    assert h.bank_b == pytest.approx(0.002 * h.calls_b)
+
+
+def test_time_scale_reaches_the_bot_through_its_config():
+    seen = []
+
+    class Rec(_Call):
+        def new_half(self, config, memory):
+            seen.append((config.time_scale, config.num_hands, config.time_bank_seconds))
+
+    play_half(Rec, Rec, "s1", 1, deals=2, time_scale=(2.5, 1.0))
+    assert sorted(seen) == [(1.0, 2, 8.0), (2.5, 2, 8.0)]
+    seen.clear()
+    m = play_match(Rec, call_factory, "s1", deals=2, time_scale=2.5)
+    assert seen == [(2.5, 2, 8.0), (2.5, 2, 8.0)]                  # both halves
+    assert isinstance(m, MatchStats)
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), float("inf"), (1.0,), (1.0, 0.0)])
+def test_time_scale_must_be_positive_and_finite(bad):
+    with pytest.raises(ValueError):
+        play_half(call_factory, call_factory, "s1", 1, deals=1, time_scale=bad)
+
+
+def test_time_scale_scales_the_clock_a_bot_file_budgets_by():
+    # The llm zoo bots budget by time.perf_counter(); on a slow CPU they would see it, so
+    # the sim scales the `time` a bot file imported (not time.sleep, not other names).
+    probes = []
+
+    def factory():
+        m = load_bot_file("tests/fixtures/clock_bot.py")
+        real_new_half = m.new_half
+
+        def new_half(config, memory):
+            real_new_half(config, memory)
+            probes.append(memory["probe"])
+        m.new_half = new_half
+        return m
+
+    play_half(factory, factory, "s1", 1, deals=1, time_scale=(2.5, 1.0))
+    plain, scaled = sorted(probes)
+    assert plain[:2] == (pytest.approx(1.0, rel=0.01), pytest.approx(1.0, rel=0.01))
+    assert scaled[:2] == (pytest.approx(2.5, rel=0.01), pytest.approx(2.5, rel=0.01))
+    assert scaled[2] and plain[2]                       # sleeping is not sped up
+    assert scaled[3] < 1.0                              # absolute times stay plausible
+    import time
+    assert load_bot_file("tests/fixtures/clock_bot.py").time is time   # loads are untouched

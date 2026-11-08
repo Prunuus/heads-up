@@ -22,11 +22,23 @@ in full with add(dt). The grace (grace_for_cpu_factor) is sized by a CPU factor,
 each preflop heuristic decision is a fixed workload too, and the median of the last 64
 is compared with its dev-PC median. The larger of the two factors sizes the grace.
 
+Simulated slow CPU (ruling R30b). sim.match can emulate a CPU s times slower: it charges
+s x the measured time minus a grace of 1 ms - 0.25 ms * s, and sends s as
+config.time_scale (sim_time_scale; the judge's AgentConfig has none, so s = 1). The bot
+then measures what it would on such a CPU: its clock runs s times fast (decisions,
+on_hand_end and the online samples, which therefore read s times the factor), and the
+warmup factor, measured at this machine's speed, is multiplied by s. So the grace is
+1 ms - 0.25 ms * max(s * warmup factor, online factor). Both factors are at least s, so
+the bot's grace never exceeds the sim's and its own count stays at or above the sim's
+charge, as with the real judge. In-process sims read online factors of about 1-2.5
+times s (see PREFLOP_REF_S), so the bot over-counts there: the safe direction.
+
 State (R22). Module state is what warmup() loads: written once, read-only afterwards.
-Per-half state lives in memory (tm, rng, opp, config_ok, cpu, faults). A PolicyBot holds
-only its settings. Never pickle bot.* objects during play: sim.match.load_bot_file runs
-each half on a private copy of the bot package, and pickle looks classes up in the
-caller's copy. For the same reason every import here sits at module top.
+Per-half state lives in memory (tm, time_scale, rng, opp, config_ok, cpu, faults). A
+PolicyBot holds only its settings. Never pickle bot.* objects during play:
+sim.match.load_bot_file runs each half on a private copy of the bot package, and pickle
+looks classes up in the caller's copy. For the same reason every import here sits at
+module top.
 """
 
 from __future__ import annotations
@@ -83,6 +95,30 @@ WINDOW = 64               # online estimate: median of the last WINDOW preflop s
 MIN_SAMPLES = 16          # ... once there are at least this many
 
 _clock = time.perf_counter
+
+
+class _ScaledClock:
+    """_clock times `scale`: every interval reads `scale` times as long, as on a CPU that
+    much slower. Looks _clock up per call."""
+
+    __slots__ = ("scale",)
+
+    def __init__(self, scale: float) -> None:
+        self.scale = scale
+
+    def __call__(self) -> float:
+        return _clock() * self.scale
+
+
+def sim_time_scale(config) -> float:
+    """The CPU slowdown a simulator emulates for this half (sim.match.SimAgentConfig);
+    1.0 for the judge's AgentConfig and for anything not a finite number > 0. Never
+    raises."""
+    try:
+        s = float(getattr(config, "time_scale", 1.0))
+    except Exception:
+        return 1.0
+    return s if 0.0 < s < math.inf else 1.0
 
 
 # ----------------------------------------------------------------------------- helpers
@@ -322,7 +358,9 @@ class PolicyBot:
         self.cpu_factor = w.cpu_factor if w is not None else 1.0
 
     def new_half(self, config, memory: dict) -> None:
-        """Fresh per-half state. The same keys every time. Never raises."""
+        """Fresh per-half state. The same keys every time. Never raises.
+        config.time_scale (a simulator's emulated slow CPU) scales the bot's clock and
+        warmup factor (module docstring)."""
         try:
             bank, hands = config.time_bank_seconds, config.num_hands
         except Exception:
@@ -331,9 +369,12 @@ class PolicyBot:
             meta = DEFAULT_META if self.blueprint is None else self.blueprint.meta
         except Exception:
             meta = None
+        scale = sim_time_scale(config)
         try:
             memory["tm"] = TimeManager(bank_s=bank, hands=hands,
-                                       grace_s=grace_for_cpu_factor(self.cpu_factor))
+                                       clock=_clock if scale == 1.0 else _ScaledClock(scale),
+                                       grace_s=grace_for_cpu_factor(self.cpu_factor * scale))
+            memory["time_scale"] = scale
             memory["rng"] = np.random.default_rng(RNG_SEED)
             memory["opp"] = None           # Task 13's OpponentModel (merged before Task 14)
             memory["config_ok"] = config_matches(config, meta)
@@ -357,10 +398,11 @@ class PolicyBot:
         """Charge the time in full with add(dt) (R9). Task 14 feeds the result to
         memory["opp"] here. Never raises: each raise would count as its own error."""
         try:
-            t0 = _clock()
             tm = _time_manager(memory)
+            clock = tm.clock if tm is not None else _clock
+            t0 = clock()
             if tm is not None:
-                tm.add(_clock() - t0)
+                tm.add(clock() - t0)
         except Exception:
             _fault(memory, "hand_end")
 
@@ -410,13 +452,14 @@ class PolicyBot:
     def _heuristic_action(self, obs, memory, tm):
         """(features, action). The time manager sizes the Monte Carlo. Preflop the work is
         fixed (no Monte Carlo), so its time is also the online CPU-factor sample."""
-        t0 = _clock()
+        clock = tm.clock if tm is not None else _clock
+        t0 = clock()
         rng = memory["rng"]
         iters = tm.iters(obs.pot, obs.street, obs.hand_index) if tm is not None else 0
         feats = compute_features(obs, iters, rng)
         action = heuristic_action(obs, feats, self.params, rng, memory["opp"])
         if feats.street == Street.PREFLOP:
-            self._observe_cpu(memory, tm, _clock() - t0)
+            self._observe_cpu(memory, tm, clock() - t0)
         return feats, action
 
     def _exploit_action(self, base, obs, feats, memory):
@@ -426,14 +469,16 @@ class PolicyBot:
         return base
 
     def _observe_cpu(self, memory, tm, dt: float) -> None:
-        """Add an online sample and resize the grace: the larger of the warmup and online
-        factors. Never raises, so it can never cost the heuristic its answer."""
+        """Add an online sample and resize the grace: the larger of the (time-scaled)
+        warmup and online factors. Never raises, so it can never cost the heuristic its
+        answer."""
         try:
             est = memory["cpu"]
             est.add(dt)
             f = est.factor()
             if f is not None and tm is not None:
-                tm.grace_s = grace_for_cpu_factor(max(self.cpu_factor, f))
+                warm = self.cpu_factor * memory.get("time_scale", 1.0)
+                tm.grace_s = grace_for_cpu_factor(max(warm, f))
         except Exception:
             pass
 

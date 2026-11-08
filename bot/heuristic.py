@@ -17,7 +17,9 @@ Module state is read-only; randomness comes only from the caller's numpy Generat
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, fields
+from numbers import Real
 
 import numpy as np
 
@@ -38,7 +40,11 @@ class HeuristicParams:
     value_raise     raise when effective equity exceeds this (flop, turn, river)
     pot_vs_half_cut RAISE_POT above this effective equity, else RAISE_HALF
     bluff_freq      bet this often with a hand too weak to value-bet, in position when checked to
-    nonnut_penalty  subtracted when the board is paired or flush-possible and we lack the nuts
+    nonnut_penalty  subtracted when the board is paired or flush-possible and we lack the nuts.
+                    Facing a bet on a flush-possible board it counts twice: the range
+                    model's d term already marks such a hand down (range_equity), and the
+                    penalty comes off the mixed equity on top (T10 review M6). Unopened it
+                    is the only marker. It is a tuned parameter like the rest.
 
     Added:
     range_weight    facing a bet postflop, weight of the range model (equity vs an opponent
@@ -51,6 +57,12 @@ class HeuristicParams:
     pre_discount    preflop: subtracted from our strength facing one raise; facing the
                     k-th raise of the street, pre_discount * (1 + 0.5 * (k - 1))
     ip_thin_shift   in position after the opponent checks: thin_value lowered by this
+
+    Every value must be a finite real number, and each per-street field a sequence of
+    exactly 3 (flop, turn, river); anything else raises ValueError naming the field, so a
+    bad parameter set fails where it is built instead of inside the policy, where the
+    layer would catch it and silently fall back. Numbers are stored as float and
+    sequences as tuples of float, so instances stay hashable.
     """
 
     open_min: float = 0.44
@@ -67,6 +79,32 @@ class HeuristicParams:
     thin_value: tuple = (0.62, 0.64, 0.66)
     pre_discount: float = 0.07
     ip_thin_shift: float = 0.06
+
+    def __post_init__(self) -> None:
+        # Fast path: a finite float (x - x == 0 is False for inf and NaN) or a tuple of 3
+        # of them is already normal, so dataclasses.replace stays cheap.
+        for name in _SCALAR_FIELDS:
+            v = getattr(self, name)
+            if type(v) is not float or v - v != 0.0:
+                object.__setattr__(self, name, _finite(name, v))
+        for name in _STREET_FIELDS:
+            v = getattr(self, name)
+            if not (type(v) is tuple and len(v) == 3
+                    and all(type(x) is float and x - x == 0.0 for x in v)):
+                if isinstance(v, (str, bytes)) or not hasattr(v, "__len__") or len(v) != 3:
+                    raise ValueError(f"{name} must be 3 numbers (flop, turn, river), got {v!r}")
+                object.__setattr__(self, name, tuple(_finite(name, x) for x in v))
+
+
+_STREET_FIELDS = ("range_discount", "value_raise", "bet_range", "thin_value")
+_SCALAR_FIELDS = tuple(f.name for f in fields(HeuristicParams) if f.name not in _STREET_FIELDS)
+
+
+def _finite(name: str, x) -> float:
+    """x as a float; ValueError unless it is a finite real number (bool is not one)."""
+    if isinstance(x, bool) or not isinstance(x, Real) or not math.isfinite(x):
+        raise ValueError(f"{name} must be finite real numbers, got {x!r}")
+    return float(x)
 
 
 def _legal(obs: Observation, want: Action) -> Action:
