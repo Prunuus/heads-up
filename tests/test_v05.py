@@ -96,9 +96,8 @@ def test_frequent_raiser_who_never_folds_is_aggressive_not_station():
 
 
 @pytest.mark.parametrize('configuration',['v05_aggressive30','v05_aggressive_limp','v05_limp20'])
-def test_ten_thousand_reachable_v05_decisions(configuration):
+def test_ten_thousand_reachable_v05_decisions(configuration, tmp_path):
     from collections import Counter
-    from pathlib import Path
     import json,random
     rng=random.Random('v05-reachability')
     memories=[{},{}]
@@ -129,4 +128,4 @@ def test_ten_thousand_reachable_v05_decisions(configuration):
         hand+=1
     assert all(coverage[s.name]>100 for s in Street)
     assert coverage['raise_cap']>100 and coverage['aggressive_profile']>1000
-    Path('reports/v05/reachability_'+configuration+'.json').write_text(json.dumps(dict(coverage),indent=2),encoding='utf8')
+    (tmp_path / ('reachability_'+configuration+'.json')).write_text(json.dumps(dict(coverage),indent=2),encoding='utf8')

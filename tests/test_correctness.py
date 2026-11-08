@@ -169,7 +169,7 @@ def test_preflop_exhaustive_distribution():
         assert 100 * sum(c for s, c in scores.items() if lo <= s < hi) / n == pytest.approx(target, abs=.01)
 
 
-def test_ten_thousand_reachable_decisions():
+def test_ten_thousand_reachable_decisions(tmp_path):
     rng = random.Random("reachable-10000")
     coverage = Counter()
     decisions = 0
@@ -207,7 +207,7 @@ def test_ten_thousand_reachable_decisions():
     assert all(coverage[f"street_{s.name}"] > 100 for s in Street)
     assert all(coverage[f"chosen_{a.name}"] > 0 for a in Action)
     assert coverage["raise_cap"] > 10
-    Path("reports/v05/reachability_control.json").write_text(json.dumps(dict(coverage), indent=2))
+    (tmp_path / "reachability_control.json").write_text(json.dumps(dict(coverage), indent=2), encoding="utf8")
 
 
 @pytest.mark.parametrize("i", range(100))
